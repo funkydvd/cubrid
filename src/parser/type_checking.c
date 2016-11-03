@@ -23734,7 +23734,6 @@ coerce_result:
 	    {
 	      expr_wrap_type = PT_TYPE_NONE;
 	    }
-
 	  new_node =
 	    pt_coerce_node_collation (parser, expr, common_coll, common_cs, true, false,
 				      PT_COLL_WRAP_TYPE_FOR_MAYBE (expr_wrap_type), PT_TYPE_NONE);

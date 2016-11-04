@@ -268,8 +268,8 @@ enum update_inplace_style
 };
 
 /* Currently mvcc update is also executed inplace, but coresponds to UPDATE_INPLACE_NONE. TODO: Refactor */
-#define HEAP_IS_UPDATE_INPLACE(update_inplace_style) \
-  ((update_inplace_style) != UPDATE_INPLACE_NONE)
+#define HEAP_IS_MVCC_UPDATE(update_inplace_style) \
+  ((update_inplace_style) == UPDATE_INPLACE_NONE)
 
 /* heap operation information structure */
 typedef struct heap_operation_context HEAP_OPERATION_CONTEXT;

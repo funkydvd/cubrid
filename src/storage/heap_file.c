@@ -167,7 +167,7 @@ static int rv;
 
 #if defined (SERVER_MODE)
 #define HEAP_UPDATE_IS_MVCC_OP(is_mvcc_class, update_style) \
-    ((is_mvcc_class) && (!HEAP_IS_UPDATE_INPLACE (update_style)) ? (true) : (false))
+    ((is_mvcc_class) && (HEAP_IS_MVCC_UPDATE (update_style)) ? (true) : (false))
 #else
 #define HEAP_UPDATE_IS_MVCC_OP(is_mvcc_class, update_style) (false)
 #endif
@@ -22269,7 +22269,7 @@ heap_update_home (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context, boo
   assert (context->home_page_watcher_p->pgptr != NULL);
   assert (context->forward_page_watcher_p != NULL);
 
-  if (!HEAP_IS_UPDATE_INPLACE (context->update_in_place) && context->home_recdes.type == REC_ASSIGN_ADDRESS)
+  if (HEAP_IS_MVCC_UPDATE (context->update_in_place) && context->home_recdes.type == REC_ASSIGN_ADDRESS)
     {
       /* updating a REC_ASSIGN_ADDRESS should be done as a non-mvcc operation */
       assert (false);
@@ -23054,9 +23054,9 @@ heap_update_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context)
    */
   is_mvcc_op = HEAP_UPDATE_IS_MVCC_OP (is_mvcc_class, context->update_in_place);
 #if defined (SERVER_MODE)
-  assert ((!is_mvcc_op && HEAP_IS_UPDATE_INPLACE (context->update_in_place))
-	  || (is_mvcc_op && !HEAP_IS_UPDATE_INPLACE (context->update_in_place)));
-  /* the update in place concept should be changed in terms of mvcc */
+  assert ((!is_mvcc_op && !HEAP_IS_MVCC_UPDATE (context->update_in_place))
+	  || (is_mvcc_op && HEAP_IS_MVCC_UPDATE (context->update_in_place)));
+
 #endif /* SERVER_MODE */
 
 #if defined(ENABLE_SYSTEMTAP)

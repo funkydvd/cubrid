@@ -167,7 +167,7 @@ static int rv;
 
 #if defined (SERVER_MODE)
 #define HEAP_UPDATE_IS_MVCC_OP(is_mvcc_class, update_style) \
-    ((is_mvcc_class) && (HEAP_IS_MVCC_UPDATE (update_style)))
+    ((is_mvcc_class) &&  (update_style==UPDATE_INPLACE_MVCC) )
 #else
 #define HEAP_UPDATE_IS_MVCC_OP(is_mvcc_class, update_style) (false)
 #endif
@@ -19968,6 +19968,7 @@ heap_insert_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
 
   repid_and_flag_bits = OR_GET_MVCC_REPID_AND_FLAG (insert_context->recdes_p->data);
   mvcc_flags = (repid_and_flag_bits >> OR_MVCC_FLAG_SHIFT_BITS) & OR_MVCC_FLAG_MASK;
+
   is_mvcc_op = HEAP_UPDATE_IS_MVCC_OP (is_mvcc_class, insert_context->update_in_place);
 #if defined (SERVER_MODE)
   /* In case of partitions, it is possible to have OR_MVCC_FLAG_VALID_PREV_VERSION flag. */
@@ -22268,7 +22269,7 @@ heap_update_home (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context, boo
   assert (context->home_page_watcher_p->pgptr != NULL);
   assert (context->forward_page_watcher_p != NULL);
 
-  if (HEAP_IS_MVCC_UPDATE (context->update_in_place) && context->home_recdes.type == REC_ASSIGN_ADDRESS)
+  if (context->update_in_place == UPDATE_INPLACE_MVCC && context->home_recdes.type == REC_ASSIGN_ADDRESS)
     {
       /* updating a REC_ASSIGN_ADDRESS should be done as a non-mvcc operation */
       assert (false);
@@ -22593,11 +22594,11 @@ heap_create_delete_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID
  *   class_oid_p(in): class OID
  *   recdes_p(in): updated record to write
  *   scancache_p(in): scan cache to use (optional)
- *   in_place(in): specifies if the "in place" type of the update operation
+ *   update_inplace_type(in): specifies the type of the update operation
  */
 void
 heap_create_update_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID * oid_p, OID * class_oid_p,
-			    RECDES * recdes_p, HEAP_SCANCACHE * scancache_p, UPDATE_INPLACE_STYLE in_place)
+			    RECDES * recdes_p, HEAP_SCANCACHE * scancache_p, UPDATE_INPLACE_STYLE update_inplace_type)
 {
   assert (context != NULL);
   assert (hfid_p != NULL);
@@ -22611,7 +22612,7 @@ heap_create_update_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID
   context->recdes_p = recdes_p;
   context->scan_cache_p = scancache_p;
   context->type = HEAP_OPERATION_UPDATE;
-  context->update_in_place = in_place;
+  context->update_in_place = update_inplace_type;
 }
 
 /*
@@ -23053,9 +23054,7 @@ heap_update_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context)
    */
   is_mvcc_op = HEAP_UPDATE_IS_MVCC_OP (is_mvcc_class, context->update_in_place);
 #if defined (SERVER_MODE)
-  assert ((!is_mvcc_op && !HEAP_IS_MVCC_UPDATE (context->update_in_place))
-	  || (is_mvcc_op && HEAP_IS_MVCC_UPDATE (context->update_in_place)));
-
+  assert ((!is_mvcc_op && context->update_in_place == UPDATE_INPLACE_MVCC) || (is_mvcc_op));
 #endif /* SERVER_MODE */
 
 #if defined(ENABLE_SYSTEMTAP)

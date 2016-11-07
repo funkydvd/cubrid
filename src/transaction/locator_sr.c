@@ -5764,7 +5764,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid, OID
 		}
 	    }
 
-	  if (HEAP_IS_MVCC_UPDATE (update_inplace_type))
+	  if (update_inplace_type == UPDATE_INPLACE_MVCC)
 	    {
 	      LOG_TDES *tdes;
 
@@ -5831,7 +5831,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid, OID
 	}
       else
 	{
-	  if (HEAP_IS_MVCC_UPDATE (update_inplace_type))
+	  if (update_inplace_type == UPDATE_INPLACE_MVCC)
 	    {
 	      update_inplace_type = UPDATE_INPLACE_CURRENT_MVCCID;
 	    }
@@ -7526,7 +7526,7 @@ locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * hfid, OID * 
 	{
 	  copy_recdes = *rec_descriptor;
 	}
-      else if (!HEAP_IS_MVCC_UPDATE (update_inplace_type) || need_locking == false)
+      else if (update_inplace_type != UPDATE_INPLACE_MVCC || need_locking == false)
 	{
 	  HEAP_GET_CONTEXT context;
 

@@ -23054,7 +23054,7 @@ heap_update_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context)
    */
   is_mvcc_op = HEAP_UPDATE_IS_MVCC_OP (is_mvcc_class, context->update_in_place);
 #if defined (SERVER_MODE)
-  assert ((!is_mvcc_op && context->update_in_place == UPDATE_INPLACE_MVCC) || (is_mvcc_op));
+  assert ((!is_mvcc_op && context->update_in_place != UPDATE_INPLACE_MVCC) || (is_mvcc_op));
 #endif /* SERVER_MODE */
 
 #if defined(ENABLE_SYSTEMTAP)

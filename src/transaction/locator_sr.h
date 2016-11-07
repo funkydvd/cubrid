@@ -68,7 +68,7 @@ extern int locator_attribute_info_force (THREAD_ENTRY * thread_p, const HFID * h
 					 int *force_count, bool not_check_fk, REPL_INFO_TYPE repl_info,
 					 int pruning_type, PRUNING_CONTEXT * pcontext,
 					 FUNC_PRED_UNPACK_INFO * func_preds, MVCC_REEV_DATA * mvcc_reev_data,
-					 UPDATE_INPLACE_STYLE force_update_inplace, RECDES * rec_descriptor,
+					 UPDATE_INPLACE_STYLE update_inplace, RECDES * rec_descriptor,
 					 bool need_locking);
 extern LC_COPYAREA *locator_allocate_copy_area_by_attr_info (THREAD_ENTRY * thread_p, HEAP_CACHE_ATTRINFO * attr_info,
 							     RECDES * old_recdes, RECDES * new_recdes,

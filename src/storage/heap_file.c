@@ -167,7 +167,7 @@ static int rv;
 
 #if defined (SERVER_MODE)
 #define HEAP_UPDATE_IS_MVCC_OP(is_mvcc_class, update_style) \
-    ((is_mvcc_class) && (HEAP_IS_MVCC_UPDATE (update_style)) ? (true) : (false))
+    ((is_mvcc_class) && (HEAP_IS_MVCC_UPDATE (update_style)))
 #else
 #define HEAP_UPDATE_IS_MVCC_OP(is_mvcc_class, update_style) (false)
 #endif
@@ -19677,7 +19677,7 @@ heap_clear_operation_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p)
 
   /* nullify everything else */
   context->type = HEAP_OPERATION_NONE;
-  context->update_in_place = UPDATE_INPLACE_NONE;
+  context->update_in_place = UPDATE_INPLACE_MVCC;
   OID_SET_NULL (&context->oid);
   OID_SET_NULL (&context->class_oid);
   context->recdes_p = NULL;
@@ -19958,7 +19958,7 @@ heap_insert_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
   int repid_and_flag_bits = 0, mvcc_flags = 0;
   char *new_ins_mvccid_pos_p, *start_p, *existing_data_p;
   MVCCID mvcc_id;
-  bool use_optimization = false;
+  bool use_optimization = false, is_mvcc_op;
 
   assert (insert_context != NULL);
   assert (insert_context->type == HEAP_OPERATION_INSERT);
@@ -19968,18 +19968,17 @@ heap_insert_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
 
   repid_and_flag_bits = OR_GET_MVCC_REPID_AND_FLAG (insert_context->recdes_p->data);
   mvcc_flags = (repid_and_flag_bits >> OR_MVCC_FLAG_SHIFT_BITS) & OR_MVCC_FLAG_MASK;
-
+  is_mvcc_op = HEAP_UPDATE_IS_MVCC_OP (is_mvcc_class, insert_context->update_in_place);
 #if defined (SERVER_MODE)
   /* In case of partitions, it is possible to have OR_MVCC_FLAG_VALID_PREV_VERSION flag. */
-  use_optimization = (HEAP_UPDATE_IS_MVCC_OP (is_mvcc_class, insert_context->update_in_place)
-		      && (!(mvcc_flags & OR_MVCC_FLAG_VALID_PREV_VERSION))
+  use_optimization = (is_mvcc_op && (!(mvcc_flags & OR_MVCC_FLAG_VALID_PREV_VERSION))
 		      && !heap_is_big_length (record_size + OR_MVCCID_SIZE));
 #endif
 
   if (use_optimization)
     {
       /* 
-       * Most common case. Since is UPDATE_INPLACE_NONE, the header does not have DELID.
+       * Most common case. Since is UPDATE_INPLACE_MVCC, the header does not have DELID.
        * Optimize header adjustment.
        */
       assert (!(mvcc_flags & OR_MVCC_FLAG_VALID_DELID));
@@ -20111,7 +20110,7 @@ heap_update_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
   if (use_optimization)
     {
       /*
-       * Most common case. Since is UPDATE_INPLACE_NONE, the header does not have DELID.
+       * Most common case. Since is UPDATE_INPLACE_MVCC, the header does not have DELID.
        * Optimize header adjustment.
        */
       assert (!(mvcc_flags & OR_MVCC_FLAG_VALID_DELID));

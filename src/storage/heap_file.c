@@ -19970,8 +19970,6 @@ heap_insert_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
   mvcc_flags = (repid_and_flag_bits >> OR_MVCC_FLAG_SHIFT_BITS) & OR_MVCC_FLAG_MASK;
 
   is_mvcc_op = HEAP_UPDATE_IS_MVCC_OP (is_mvcc_class, insert_context->update_in_place);
-  if (is_mvcc_op != is_mvcc_class)
-    printf ("Naspa\n");
 #if defined (SERVER_MODE)
   /* In case of partitions, it is possible to have OR_MVCC_FLAG_VALID_PREV_VERSION flag. */
   use_optimization = (is_mvcc_op && (!(mvcc_flags & OR_MVCC_FLAG_VALID_PREV_VERSION))
@@ -20106,8 +20104,6 @@ heap_update_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
   update_mvcc_flags = OR_MVCC_FLAG_VALID_INSID | OR_MVCC_FLAG_VALID_PREV_VERSION;
 
   is_mvcc_op = HEAP_UPDATE_IS_MVCC_OP (is_mvcc_class, update_context->update_in_place);
-  if (is_mvcc_op != is_mvcc_class)
-    printf ("Naspa\n");
 #if defined (SERVER_MODE)
   use_optimization = (is_mvcc_op && !heap_is_big_length (record_size + OR_MVCCID_SIZE + OR_MVCC_PREV_VERSION_LSA_SIZE));
 #endif
@@ -23057,8 +23053,6 @@ heap_update_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context)
    * Determine type of operation
    */
   is_mvcc_op = HEAP_UPDATE_IS_MVCC_OP (is_mvcc_class, context->update_in_place);
-  if (is_mvcc_op != is_mvcc_class)
-    printf ("Naspa\n");
 #if defined (SERVER_MODE)
   assert ((!is_mvcc_op && context->update_in_place == UPDATE_INPLACE_MVCC) || (is_mvcc_op));
 #endif /* SERVER_MODE */

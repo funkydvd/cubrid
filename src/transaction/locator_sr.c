@@ -5766,7 +5766,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid, OID
 
 	  if (update_inplace_type == UPDATE_INPLACE_MVCC)
 	    {
-	      /*LOG_TDES *tdes;
+	      /* LOG_TDES *tdes;
 
 	         tdes = LOG_FIND_CURRENT_TDES (thread_p);
 	         if (!(has_index & LC_FLAG_HAS_UNIQUE_INDEX))
@@ -12982,7 +12982,7 @@ redistribute_partition_data (THREAD_ENTRY * thread_p, OID * class_oid, int no_oi
 	      error =
 		locator_insert_force (thread_p, &class_hfid, &cls_oid, &oid, &recdes, true, SINGLE_ROW_INSERT,
 				      &parent_scan_cache, &force_count, DB_PARTITIONED_CLASS, &pcontext, NULL,
-				      UPDATE_INPLACE_OLD_MVCCID);
+				      UPDATE_INPLACE_CURRENT_MVCCID);
 	      if (error != NO_ERROR)
 		{
 		  goto exit;

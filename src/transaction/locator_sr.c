@@ -5766,22 +5766,22 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid, OID
 
 	  if (update_inplace_type == UPDATE_INPLACE_MVCC)
 	    {
-	      LOG_TDES *tdes;
+	      /*LOG_TDES *tdes;
 
-	      tdes = LOG_FIND_CURRENT_TDES (thread_p);
-	      if (!(has_index & LC_FLAG_HAS_UNIQUE_INDEX))
-		{
-		  MVCC_REC_HEADER old_rec_header;
+	         tdes = LOG_FIND_CURRENT_TDES (thread_p);
+	         if (!(has_index & LC_FLAG_HAS_UNIQUE_INDEX))
+	         {
+	         MVCC_REC_HEADER old_rec_header;
 
-		  or_mvcc_get_header (oldrecdes, &old_rec_header);
-		  if (logtb_find_current_mvccid (thread_p) != old_rec_header.mvcc_ins_id)
-		    {
-#if defined (SERVER_MODE)
-		      /* If not inserted by me, I must have lock. */
-		      assert (lock_has_lock_on_object (oid, class_oid, thread_get_current_tran_index (), X_LOCK) > 0);
-#endif /* SERVER_MODE */
-		    }
-		}
+	         or_mvcc_get_header (oldrecdes, &old_rec_header);
+	         if (logtb_find_current_mvccid (thread_p) != old_rec_header.mvcc_ins_id)
+	         {
+	         #if defined (SERVER_MODE)
+	         /* If not inserted by me, I must have lock. *
+	         assert (lock_has_lock_on_object (oid, class_oid, thread_get_current_tran_index (), X_LOCK) > 0);
+	         #endif /* SERVER_MODE *
+	         }
+	         } */
 	    }
 	  else if (update_inplace_type == UPDATE_INPLACE_OLD_MVCCID)
 	    {
@@ -5833,6 +5833,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid, OID
 	{
 	  if (update_inplace_type == UPDATE_INPLACE_MVCC)
 	    {
+	      /* we have mvcc disabled class, so we can't make MVCC update */
 	      update_inplace_type = UPDATE_INPLACE_CURRENT_MVCCID;
 	    }
 

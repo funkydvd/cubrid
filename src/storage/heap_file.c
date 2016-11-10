@@ -834,6 +834,8 @@ static int heap_fix_forward_page (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
 static void heap_build_forwarding_recdes (RECDES * recdes_p, INT16 rec_type, OID * forward_oid);
 
 /* heap insert related functions */
+static void compute_record_size (THREAD_ENTRY * thread_p, int *record_size, MVCC_REC_HEADER * mvcc_rec_header,
+				 bool is_mvcc_class);
 static int heap_insert_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context,
 					     bool is_mvcc_class);
 static int heap_update_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * update_context,
@@ -19939,6 +19941,38 @@ heap_build_forwarding_recdes (RECDES * recdes_p, INT16 rec_type, OID * forward_o
   recdes_p->area_size = sizeof (OID);
 }
 
+static void
+compute_record_size (THREAD_ENTRY * thread_p, int *record_size, MVCC_REC_HEADER * mvcc_rec_header, bool is_mvcc_class)
+{
+#if defined (SERVER_MODE)
+  if (is_mvcc_class)
+    {
+      /* get MVCC id */
+      MVCCID mvcc_id = logtb_get_current_mvccid (thread_p);
+
+      /* set MVCC INSID if necessary */
+      if (!MVCC_IS_FLAG_SET (mvcc_rec_header, OR_MVCC_FLAG_VALID_INSID))
+	{
+	  MVCC_SET_FLAG (mvcc_rec_header, OR_MVCC_FLAG_VALID_INSID);
+	  (*record_size) += OR_MVCCID_SIZE;
+	}
+      MVCC_SET_INSID (mvcc_rec_header, mvcc_id);
+    }
+  else
+#endif /* SERVER_MODE */
+    {
+      int curr_header_size, new_header_size;
+
+      /* strip MVCC information */
+      curr_header_size = mvcc_header_size_lookup[mvcc_rec_header->mvcc_flag];
+      MVCC_CLEAR_ALL_FLAG_BITS (mvcc_rec_header);
+      new_header_size = mvcc_header_size_lookup[mvcc_rec_header->mvcc_flag];
+
+      /* compute new record size */
+      (*record_size) -= (curr_header_size - new_header_size);
+    }
+}
+
 /*
  * heap_insert_adjust_recdes_header () - adjust record header for insert
  *                                       operation
@@ -20017,33 +20051,7 @@ heap_insert_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
 
   if (insert_context->update_in_place != UPDATE_INPLACE_OLD_MVCCID)
     {
-#if defined (SERVER_MODE)
-      if (is_mvcc_class)
-	{
-	  /* get MVCC id */
-	  mvcc_id = logtb_get_current_mvccid (thread_p);
-
-	  /* set MVCC INSID if necessary */
-	  if (!MVCC_IS_FLAG_SET (&mvcc_rec_header, OR_MVCC_FLAG_VALID_INSID))
-	    {
-	      MVCC_SET_FLAG (&mvcc_rec_header, OR_MVCC_FLAG_VALID_INSID);
-	      record_size += OR_MVCCID_SIZE;
-	    }
-	  MVCC_SET_INSID (&mvcc_rec_header, mvcc_id);
-	}
-      else
-#endif /* SERVER_MODE */
-	{
-	  int curr_header_size, new_header_size;
-
-	  /* strip MVCC information */
-	  curr_header_size = mvcc_header_size_lookup[mvcc_rec_header.mvcc_flag];
-	  MVCC_CLEAR_ALL_FLAG_BITS (&mvcc_rec_header);
-	  new_header_size = mvcc_header_size_lookup[mvcc_rec_header.mvcc_flag];
-
-	  /* compute new record size */
-	  record_size -= (curr_header_size - new_header_size);
-	}
+      compute_record_size (thread_p, &record_size, &mvcc_rec_header, is_mvcc_class);
     }
   else if (MVCC_IS_HEADER_DELID_VALID (&mvcc_rec_header))
     {
@@ -20172,33 +20180,7 @@ heap_update_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
 
   if (update_context->update_in_place != UPDATE_INPLACE_OLD_MVCCID)
     {
-#if defined (SERVER_MODE)
-      if (is_mvcc_class)
-	{
-	  /* get MVCC id */
-	  MVCCID mvcc_id = logtb_get_current_mvccid (thread_p);
-
-	  /* set MVCC INSID if necessary */
-	  if (!MVCC_IS_FLAG_SET (&mvcc_rec_header, OR_MVCC_FLAG_VALID_INSID))
-	    {
-	      MVCC_SET_FLAG (&mvcc_rec_header, OR_MVCC_FLAG_VALID_INSID);
-	      record_size += OR_MVCCID_SIZE;
-	    }
-	  MVCC_SET_INSID (&mvcc_rec_header, mvcc_id);
-	}
-      else
-#endif /* SERVER_MODE */
-	{
-	  int curr_header_size, new_header_size;
-
-	  /* strip MVCC information */
-	  curr_header_size = mvcc_header_size_lookup[mvcc_rec_header.mvcc_flag];
-	  MVCC_CLEAR_ALL_FLAG_BITS (&mvcc_rec_header);
-	  new_header_size = mvcc_header_size_lookup[mvcc_rec_header.mvcc_flag];
-
-	  /* compute new record size */
-	  record_size -= (curr_header_size - new_header_size);
-	}
+      compute_record_size (thread_p, &record_size, &mvcc_rec_header, is_mvcc_class);
     }
 
 #if defined (SERVER_MODE)

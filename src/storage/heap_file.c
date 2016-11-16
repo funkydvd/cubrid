@@ -17587,6 +17587,11 @@ heap_eval_function_index (THREAD_ENTRY * thread_p, FUNCTION_INDEX_INFO * func_in
       *fi_domain = tp_domain_cache (func_pred->func_regu->domain);
     }
 
+  if (res != NULL && res->need_clear == true)
+    {
+      pr_clear_value (res);
+    }
+
 end:
   if (attrinfo_clear && cache_attr_info)
     {

@@ -263,7 +263,7 @@ typedef enum update_inplace_style UPDATE_INPLACE_STYLE;
 enum update_inplace_style
 {
   UPDATE_INPLACE_MVCC = 0,	/* MVCC update */
-  UPDATE_INPLACE_NON_MVCC = 1,	/* non-MVCC update */
+  UPDATE_INPLACE_NON_MVCC = 1	/* non-MVCC update */
 };
 
 /* heap operation information structure */

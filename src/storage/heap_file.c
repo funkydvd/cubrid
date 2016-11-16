@@ -22575,7 +22575,7 @@ heap_create_delete_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID
  */
 void
 heap_create_update_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID * oid_p, OID * class_oid_p,
-			    RECDES * recdes_p, HEAP_SCANCACHE * scancache_p, UPDATE_INPLACE_STYLE update_inplace_type)
+			    RECDES * recdes_p, HEAP_SCANCACHE * scancache_p, UPDATE_INPLACE_TYPE update_inplace_type)
 {
   assert (context != NULL);
   assert (hfid_p != NULL);

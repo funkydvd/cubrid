@@ -17456,7 +17456,7 @@ heap_object_upgrade_domain (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * upd_scanca
     locator_attribute_info_force (thread_p, &upd_scancache->node.hfid, oid, attr_info, atts_id, updated_n_attrs_id,
 				  LC_FLUSH_UPDATE, SINGLE_ROW_UPDATE, upd_scancache, &force_count, false,
 				  REPL_INFO_TYPE_RBR_NORMAL, DB_NOT_PARTITIONED_CLASS, NULL, NULL, NULL,
-				  UPDATE_INPLACE_CURRENT_MVCCID, NULL, false);
+				  UPDATE_INPLACE_NON_MVCC, NULL, false);
   if (error != NO_ERROR)
     {
       if (error == ER_MVCC_NOT_SATISFIED_REEVALUATION)
@@ -20049,14 +20049,7 @@ heap_insert_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
       return ER_FAILED;
     }
 
-  if (insert_context->update_in_place != UPDATE_INPLACE_OLD_MVCCID)
-    {
-      compute_record_size (thread_p, &record_size, &mvcc_rec_header, is_mvcc_class);
-    }
-  else if (MVCC_IS_HEADER_DELID_VALID (&mvcc_rec_header))
-    {
-      insert_context->is_redistribute_insert_with_delid = true;
-    }
+  compute_record_size (thread_p, &record_size, &mvcc_rec_header, is_mvcc_class);
 
   MVCC_CLEAR_FLAG_BITS (&mvcc_rec_header, OR_MVCC_FLAG_VALID_PREV_VERSION);
 
@@ -20178,10 +20171,7 @@ heap_update_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
       return ER_FAILED;
     }
 
-  if (update_context->update_in_place != UPDATE_INPLACE_OLD_MVCCID)
-    {
-      compute_record_size (thread_p, &record_size, &mvcc_rec_header, is_mvcc_class);
-    }
+  compute_record_size (thread_p, &record_size, &mvcc_rec_header, is_mvcc_class);
 
 #if defined (SERVER_MODE)
   if (is_mvcc_op)

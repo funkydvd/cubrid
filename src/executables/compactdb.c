@@ -600,8 +600,7 @@ disk_update_instance (MOP classop, DESC_OBJ * obj, OID * oid)
       update_indexes (WS_OID (classop), oid, Diskrec);
     }
 
-  heap_create_update_context (&update_context, hfid, oid, WS_OID (classop), Diskrec, NULL,
-			      UPDATE_INPLACE_CURRENT_MVCCID);
+  heap_create_update_context (&update_context, hfid, oid, WS_OID (classop), Diskrec, NULL, UPDATE_INPLACE_NON_MVCC);
   if (heap_update_logical (NULL, &update_context) != NO_ERROR)
     {
       printf (msgcat_message (MSGCAT_CATALOG_UTILS, MSGCAT_UTIL_SET_COMPACTDB, COMPACTDB_MSG_CANT_UPDATE));

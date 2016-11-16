@@ -5089,16 +5089,6 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid, OID
   heap_create_insert_context (&context, &real_hfid, &real_class_oid, recdes, local_scan_cache);
   context.update_in_place = update_inplace_type;
 
-  if (update_inplace_type == UPDATE_INPLACE_OLD_MVCCID)
-    {
-      REPR_ID rep;
-
-      /* insert due to redistribute partition data - set the correct representation id of the new class */
-
-      rep = heap_get_class_repr_id (thread_p, &real_class_oid);
-      (void) or_replace_rep_id (context.recdes_p, rep);
-    }
-
   /* execute insert */
   if (heap_insert_logical (thread_p, &context) != NO_ERROR)
     {
@@ -5247,7 +5237,7 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid, OID
 	      recdes = &new_recdes;
 	      /* Cache object has been updated, we need update the value again */
 	      heap_create_update_context (&update_context, &real_hfid, oid, &real_class_oid, recdes, local_scan_cache,
-					  UPDATE_INPLACE_CURRENT_MVCCID);
+					  UPDATE_INPLACE_NON_MVCC);
 	      if (heap_update_logical (thread_p, &update_context) != NO_ERROR)
 		{
 		  assert (er_errid () != NO_ERROR);
@@ -5546,8 +5536,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid, OID
 	    }
 	}
 
-      heap_create_update_context (&update_context, hfid, oid, class_oid, recdes, scan_cache,
-				  UPDATE_INPLACE_CURRENT_MVCCID);
+      heap_create_update_context (&update_context, hfid, oid, class_oid, recdes, scan_cache, UPDATE_INPLACE_NON_MVCC);
       error_code = heap_update_logical (thread_p, &update_context);
       if (error_code != NO_ERROR)
 	{
@@ -5619,7 +5608,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid, OID
 	      OR_PUT_OID (rep_dir_offset, &rep_dir);
 
 	      heap_create_update_context (&update_context, hfid, oid, class_oid, recdes, scan_cache,
-					  UPDATE_INPLACE_CURRENT_MVCCID);
+					  UPDATE_INPLACE_NON_MVCC);
 	      error_code = heap_update_logical (thread_p, &update_context);
 	      if (error_code != NO_ERROR)
 		{
@@ -5727,7 +5716,7 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid, OID
 		{
 		  if (er_errid () == ER_HEAP_NODATA_NEWADDRESS)
 		    {
-		      update_inplace_type = UPDATE_INPLACE_CURRENT_MVCCID;
+		      update_inplace_type = UPDATE_INPLACE_NON_MVCC;
 
 		      /* The object is a new instance, that is only the address (no content) is known by the heap
 		       * manager. This is a normal behavior and, if we have an index, we need to add the object to the 
@@ -5783,58 +5772,13 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid, OID
 		    }
 		}
 	    }
-	  else if (update_inplace_type == UPDATE_INPLACE_OLD_MVCCID)
-	    {
-	      MVCC_REC_HEADER old_rec_header, new_rec_header;
-
-	      if (or_mvcc_get_header (oldrecdes, &old_rec_header) != NO_ERROR
-		  || or_mvcc_get_header (recdes, &new_rec_header) != NO_ERROR)
-		{
-		  goto error;
-		}
-
-	      if (MVCC_IS_FLAG_SET (&old_rec_header, OR_MVCC_FLAG_VALID_INSID))
-		{
-		  MVCC_SET_FLAG_BITS (&new_rec_header, OR_MVCC_FLAG_VALID_INSID);
-		  MVCC_SET_INSID (&new_rec_header, MVCC_GET_INSID (&old_rec_header));
-		}
-	      else
-		{
-		  MVCC_CLEAR_FLAG_BITS (&new_rec_header, OR_MVCC_FLAG_VALID_INSID);
-		}
-
-	      if (MVCC_IS_HEADER_DELID_VALID (&old_rec_header))
-		{
-		  MVCC_SET_FLAG_BITS (&new_rec_header, OR_MVCC_FLAG_VALID_DELID);
-		  MVCC_SET_DELID (&new_rec_header, MVCC_GET_DELID (&old_rec_header));
-		}
-	      else
-		{
-		  MVCC_CLEAR_FLAG_BITS (&new_rec_header, OR_MVCC_FLAG_VALID_DELID);
-		}
-
-	      if (MVCC_IS_FLAG_SET (&old_rec_header, OR_MVCC_FLAG_VALID_PREV_VERSION))
-		{
-		  MVCC_SET_FLAG_BITS (&new_rec_header, OR_MVCC_FLAG_VALID_PREV_VERSION);
-		  MVCC_SET_PREVIOUS_VERSION_LSA (&new_rec_header, &MVCC_GET_PREV_VERSION_LSA (&old_rec_header));
-		}
-	      else
-		{
-		  MVCC_CLEAR_FLAG_BITS (&new_rec_header, OR_MVCC_FLAG_VALID_PREV_VERSION);
-		}
-
-	      if (or_mvcc_set_header (recdes, &new_rec_header) != NO_ERROR)
-		{
-		  goto error;
-		}
-	    }
 	}
       else
 	{
 	  if (update_inplace_type == UPDATE_INPLACE_MVCC)
 	    {
 	      /* we have mvcc disabled class, so we can't make MVCC update */
-	      update_inplace_type = UPDATE_INPLACE_CURRENT_MVCCID;
+	      update_inplace_type = UPDATE_INPLACE_NON_MVCC;
 	    }
 
 	  if (lock_object (thread_p, oid, class_oid, X_LOCK, LK_UNCOND_LOCK) != LK_GRANTED)
@@ -12982,7 +12926,7 @@ redistribute_partition_data (THREAD_ENTRY * thread_p, OID * class_oid, int no_oi
 	      error =
 		locator_insert_force (thread_p, &class_hfid, &cls_oid, &oid, &recdes, true, SINGLE_ROW_INSERT,
 				      &parent_scan_cache, &force_count, DB_PARTITIONED_CLASS, &pcontext, NULL,
-				      UPDATE_INPLACE_CURRENT_MVCCID);
+				      UPDATE_INPLACE_NON_MVCC);
 	      if (error != NO_ERROR)
 		{
 		  goto exit;

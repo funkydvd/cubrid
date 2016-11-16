@@ -120,7 +120,7 @@ extern int catcls_compile_catalog_classes (THREAD_ENTRY * thread_p);
 extern int catcls_insert_catalog_classes (THREAD_ENTRY * thread_p, RECDES * record);
 extern int catcls_delete_catalog_classes (THREAD_ENTRY * thread_p, const char *name, OID * class_oid);
 extern int catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name, RECDES * record, OID * class_oid_p,
-					  UPDATE_INPLACE_STYLE update_inplace_type, bool needs_old_header);
+					  UPDATE_INPLACE_TYPE update_inplace_type, bool needs_old_header);
 extern int catcls_finalize_class_oid_to_oid_hash_table (THREAD_ENTRY * thread_p);
 extern int catcls_remove_entry (THREAD_ENTRY * thread_p, OID * class_oid);
 extern int catcls_get_server_compat_info (THREAD_ENTRY * thread_p, int *charset_id_p, char *lang_buf,
@@ -164,13 +164,13 @@ static int catcls_put_or_value_into_record (THREAD_ENTRY * thread_p, OR_VALUE * 
 static int catcls_insert_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OID * root_oid);
 static int catcls_delete_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p);
 static int catcls_update_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OR_VALUE * old_value, int *uflag,
-				 UPDATE_INPLACE_STYLE update_inplace_type, bool needs_old_header);
+				 UPDATE_INPLACE_TYPE update_inplace_type, bool needs_old_header);
 static int catcls_insert_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OID * oid, OID * root_oid,
 				   OID * class_oid, HFID * hfid, HEAP_SCANCACHE * scan);
 static int catcls_delete_instance (THREAD_ENTRY * thread_p, OID * oid, OID * class_oid, HFID * hfid,
 				   HEAP_SCANCACHE * scan);
 static int catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OID * oid, OID * class_oid, HFID * hfid,
-				   HEAP_SCANCACHE * scan, UPDATE_INPLACE_STYLE update_inplace_type,
+				   HEAP_SCANCACHE * scan, UPDATE_INPLACE_TYPE update_inplace_type,
 				   bool needs_old_header);
 static CATCLS_ENTRY *catcls_allocate_entry (THREAD_ENTRY * thread_p);
 static int catcls_free_entry_kv (const void *key, void *data, void *args);
@@ -3835,7 +3835,7 @@ error:
  */
 static int
 catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OID * oid_p, OID * class_oid_p, HFID * hfid_p,
-			HEAP_SCANCACHE * scan_p, UPDATE_INPLACE_STYLE update_inplace_type, bool needs_old_header)
+			HEAP_SCANCACHE * scan_p, UPDATE_INPLACE_TYPE update_inplace_type, bool needs_old_header)
 {
   RECDES record, old_record;
   OR_VALUE *old_value_p = NULL;
@@ -4142,7 +4142,7 @@ error:
  */
 int
 catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p, RECDES * record_p, OID * class_oid_p,
-			       UPDATE_INPLACE_STYLE update_inplace_type, bool needs_old_header)
+			       UPDATE_INPLACE_TYPE update_inplace_type, bool needs_old_header)
 {
   OR_VALUE *value_p = NULL;
   OID oid, *catalog_class_oid_p;
@@ -4587,7 +4587,7 @@ exit:
  */
 static int
 catcls_update_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OR_VALUE * old_value_p, int *uflag,
-		      UPDATE_INPLACE_STYLE update_inplace_type, bool needs_old_header)
+		      UPDATE_INPLACE_TYPE update_inplace_type, bool needs_old_header)
 {
   OR_VALUE *subset_p = NULL, *old_subset_p = NULL;
   DB_SET *oid_set_p = NULL;

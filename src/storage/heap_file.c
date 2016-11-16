@@ -17456,7 +17456,7 @@ heap_object_upgrade_domain (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * upd_scanca
     locator_attribute_info_force (thread_p, &upd_scancache->node.hfid, oid, attr_info, atts_id, updated_n_attrs_id,
 				  LC_FLUSH_UPDATE, SINGLE_ROW_UPDATE, upd_scancache, &force_count, false,
 				  REPL_INFO_TYPE_RBR_NORMAL, DB_NOT_PARTITIONED_CLASS, NULL, NULL, NULL,
-				  UPDATE_INPLACE_CURRENT_MVCCID, NULL, false);
+				  UPDATE_INPLACE_NON_MVCC, NULL, false, true);
   if (error != NO_ERROR)
     {
       if (error == ER_MVCC_NOT_SATISFIED_REEVALUATION)
@@ -19704,6 +19704,7 @@ heap_clear_operation_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p)
   context->is_redistribute_insert_with_delid = false;
 
   context->time_track = NULL;
+  context->needs_old_header = false;
 }
 
 /*
@@ -20049,7 +20050,7 @@ heap_insert_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
       return ER_FAILED;
     }
 
-  if (insert_context->update_in_place != UPDATE_INPLACE_OLD_MVCCID)
+  if (insert_context->needs_old_header == false)
     {
       compute_record_size (thread_p, &record_size, &mvcc_rec_header, is_mvcc_class);
     }
@@ -20178,7 +20179,7 @@ heap_update_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
       return ER_FAILED;
     }
 
-  if (update_context->update_in_place != UPDATE_INPLACE_OLD_MVCCID)
+  if (update_context->needs_old_header == false)
     {
       compute_record_size (thread_p, &record_size, &mvcc_rec_header, is_mvcc_class);
     }
@@ -22542,6 +22543,7 @@ heap_create_insert_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID
   context->recdes_p = recdes_p;
   context->scan_cache_p = scancache_p;
   context->type = HEAP_OPERATION_INSERT;
+
 }
 
 /*
@@ -22580,7 +22582,8 @@ heap_create_delete_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID
  */
 void
 heap_create_update_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID * oid_p, OID * class_oid_p,
-			    RECDES * recdes_p, HEAP_SCANCACHE * scancache_p, UPDATE_INPLACE_STYLE update_inplace_type)
+			    RECDES * recdes_p, HEAP_SCANCACHE * scancache_p, UPDATE_INPLACE_STYLE update_inplace_type,
+			    bool needs_old_header)
 {
   assert (context != NULL);
   assert (hfid_p != NULL);
@@ -22595,6 +22598,7 @@ heap_create_update_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID
   context->scan_cache_p = scancache_p;
   context->type = HEAP_OPERATION_UPDATE;
   context->update_in_place = update_inplace_type;
+  context->needs_old_header = needs_old_header;
 }
 
 /*

@@ -263,8 +263,7 @@ typedef enum update_inplace_style UPDATE_INPLACE_STYLE;
 enum update_inplace_style
 {
   UPDATE_INPLACE_MVCC = 0,	/* MVCC update */
-  UPDATE_INPLACE_CURRENT_MVCCID = 1,	/* non-MVCC update with current MVCC ID. */
-  UPDATE_INPLACE_OLD_MVCCID = 2	/* non-MVCC update style with old MVCC ID. Preserves old MVCC ID */
+  UPDATE_INPLACE_NON_MVCC = 1,	/* non-MVCC update */
 };
 
 /* heap operation information structure */
@@ -309,6 +308,7 @@ struct heap_operation_context
   bool is_logical_old;		/* true if initial record was not REC_ASSIGN_ADDRESS */
   bool is_redistribute_insert_with_delid;	/* true if the insert is due to a partition redistribute data operation 
 						 * and has a valid delid */
+  bool needs_old_header;
 
   /* Performance stat dump. */
   PERF_UTIME_TRACKER *time_track;
@@ -622,7 +622,8 @@ extern void heap_create_insert_context (HEAP_OPERATION_CONTEXT * context, HFID *
 extern void heap_create_delete_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID * oid_p, OID * class_oid_p,
 					HEAP_SCANCACHE * scancache_p);
 extern void heap_create_update_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID * oid_p, OID * class_oid_p,
-					RECDES * recdes_p, HEAP_SCANCACHE * scancache_p, UPDATE_INPLACE_STYLE in_place);
+					RECDES * recdes_p, HEAP_SCANCACHE * scancache_p, UPDATE_INPLACE_STYLE in_place,
+					bool needs_old_header);
 extern int heap_insert_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context);
 extern int heap_delete_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context);
 extern int heap_update_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context);

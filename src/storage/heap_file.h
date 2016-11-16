@@ -259,8 +259,8 @@ typedef enum
   HEAP_OPERATION_UPDATE
 } HEAP_OPERATION_TYPE;
 
-typedef enum update_inplace_style UPDATE_INPLACE_STYLE;
-enum update_inplace_style
+typedef enum update_inplace_type UPDATE_INPLACE_TYPE;
+enum update_inplace_type
 {
   UPDATE_INPLACE_MVCC = 0,	/* MVCC update */
   UPDATE_INPLACE_NON_MVCC = 1	/* non-MVCC update */

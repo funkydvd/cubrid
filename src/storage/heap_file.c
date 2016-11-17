@@ -22584,6 +22584,7 @@ heap_create_delete_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID
  *   recdes_p(in): updated record to write
  *   scancache_p(in): scan cache to use (optional)
  *   update_inplace_type(in): specifies the type of the update operation
+ *   needs_old_header: true if context needs old header
  */
 void
 heap_create_update_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID * oid_p, OID * class_oid_p,

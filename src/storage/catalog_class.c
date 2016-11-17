@@ -3832,6 +3832,7 @@ error:
  *   hfid(in):
  *   scan(in):
  *   update_inplace_type(in): the type of the update
+ *   needs_old_header: true if context needs old header
  */
 static int
 catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OID * oid_p, OID * class_oid_p, HFID * hfid_p,
@@ -4138,7 +4139,7 @@ error:
  *   class_oid_p(in): class OID
  *   update_inplace_type(in): The update of the instance will be made 
                               according to provided style and class (MVCC or non MVCC).
- * needs_old_header - old header is needed or not
+ *   needs_old_header: true if context needs old header
  */
 int
 catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p, RECDES * record_p, OID * class_oid_p,
@@ -4584,6 +4585,7 @@ exit:
  *   old_value_p(in): old values 
  *   uflag(in): update necessary flag
  *   update_inplace_type(in): the type of the update
+ *   needs_old_header: true if context needs old header
  */
 static int
 catcls_update_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OR_VALUE * old_value_p, int *uflag,

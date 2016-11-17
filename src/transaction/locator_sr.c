@@ -4972,6 +4972,7 @@ error3:
  *   pcontext(in): partition pruning context
  *   func_preds(in): cached function index expressions
  *   update_inplace_type: the type of the update 
+ *   needs_old_header: true if context needs old header
  * Note: The given object is inserted on this heap and all appropriate
  *              index entries are inserted.
  */
@@ -5429,6 +5430,7 @@ locator_move_record (THREAD_ENTRY * thread_p, HFID * old_hfid, OID * old_class_o
  *   mvcc_reev_data(in): MVCC reevaluation data
  *   update_inplace_type(in): The update of the instance will be made in
  *			 place and according to provided style and class (MVCC or non MVCC).
+ *   needs_old_header: true if context needs old header
  *
  * Note: The given object is updated on this heap and all appropriate
  *              index entries are updated.
@@ -7490,6 +7492,7 @@ locator_allocate_copy_area_by_attr_info (THREAD_ENTRY * thread_p, HEAP_CACHE_ATT
  *   update_inplace_type(in): The update of the instance will be
  *			 made according to provided style and class (MVCC or non MVCC).
  *  need_locking(in): true, if need locking
+ *  needs_old_header: true if context needs old header
  *
  * Note: Force an object represented by an attribute information structure.
  *       For insert the oid is set as a side effect.

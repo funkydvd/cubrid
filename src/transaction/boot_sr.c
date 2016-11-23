@@ -538,179 +538,6 @@ boot_max_pages_new_volume (void)
 }
 
 /*
-<<<<<<< HEAD
- * boot_add_volume () - add a volume to the database
- *
- * return : volid or NULL_VOLID (in case of failure)
- *
- *   ext_info(in): volume info
- *
- * Note: Add a new volume to the database. The volume may be a permanent or
- *       temporary volume. The addition of the volume is a system operation
- *       that will be either aborted in case of failure or committed in case of
- *       success, independently on the destiny of the current transaction.
- *       The volume becomes immediately available to other transactions.
- */
-static VOLID
-boot_add_volume (THREAD_ENTRY * thread_p, DBDEF_VOL_EXT_INFO * ext_info)
-{
-  HEAP_OPERATION_CONTEXT update_context;
-  VOLID volid;
-  int vol_fd;
-  RECDES recdes;		/* Record descriptor which describe the volume. */
-  bool in_system_op = false;
-  VPID boot_db_parm_vpid = VPID_INITIALIZER;
-
-  if (csect_enter (thread_p, CSECT_BOOT_SR_DBPARM, INF_WAIT) != NO_ERROR)
-    {
-      return NULL_VOLID;
-    }
-
-  /* 
-   * Assign a volume identifier according to its type
-   */
-
-  if (ext_info->purpose != DISK_TEMPVOL_TEMP_PURPOSE)
-    {
-      volid = boot_Db_parm->last_volid + 1;
-      if (volid > LOG_MAX_DBVOLID || (boot_Db_parm->temp_nvols > 0 && volid >= boot_Db_parm->temp_last_volid))
-	{
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_BO_MAXNUM_VOLS_HAS_BEEN_EXCEEDED, 1, LOG_MAX_DBVOLID);
-	  goto error;
-	}
-    }
-  else
-    {
-      if (boot_Db_parm->temp_nvols > 0)
-	{
-	  volid = boot_Db_parm->temp_last_volid - 1;
-	}
-      else
-	{
-	  volid = LOG_MAX_DBVOLID;
-	}
-      if (volid <= boot_Db_parm->last_volid)
-	{
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_BO_MAXNUM_VOLS_HAS_BEEN_EXCEEDED, 1, LOG_MAX_DBVOLID);
-	  goto error;
-	}
-    }
-
-
-  if (log_start_system_op (thread_p) == NULL)
-    {
-      goto error;
-    }
-  in_system_op = true;
-
-  if (ext_info->overwrite == false && fileio_is_volume_exist (ext_info->name))
-    {
-      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_BO_VOLUME_EXISTS, 1, ext_info->name);
-      goto error;
-    }
-
-  pgbuf_refresh_max_permanent_volume_id (volid);
-
-  /* Format the volume */
-  if (disk_format (thread_p, boot_Db_full_name, volid, ext_info) == NULL_VOLID)
-    {
-      goto error;
-    }
-
-  if (logpb_add_volume (NULL, volid, ext_info->name, ext_info->purpose) != volid)
-    {
-      goto error;
-    }
-
-  /* 
-   * Modify the system parameter table to reflect the addition of the volume
-   */
-
-  if (ext_info->purpose != DISK_TEMPVOL_TEMP_PURPOSE)
-    {
-      boot_Db_parm->nvols++;
-      boot_Db_parm->last_volid = volid;
-    }
-  else
-    {
-      boot_Db_parm->temp_nvols++;
-      boot_Db_parm->temp_last_volid = volid;
-    }
-
-  recdes.area_size = recdes.length = DB_SIZEOF (*boot_Db_parm);
-  recdes.data = (char *) boot_Db_parm;
-
-  /* Before updating and logging disk representation of boot_Dp_parm, we need to log a page flush on undo.
-   * Recovery must flush boot_Db_parm changes before removing volume from disk.
-   */
-  VPID_GET_FROM_OID (&boot_db_parm_vpid, boot_Db_parm_oid);
-  log_append_undo_data2 (thread_p, RVPGBUF_FLUSH_PAGE, NULL, NULL, 0, sizeof (boot_db_parm_vpid), &boot_db_parm_vpid);
-
-  heap_create_update_context (&update_context, &boot_Db_parm->hfid, boot_Db_parm_oid, &boot_Db_parm->rootclass_oid,
-			      &recdes, NULL, UPDATE_INPLACE_NON_MVCC, false);
-  if (heap_update_logical (thread_p, &update_context) != NO_ERROR)
-    {
-      /* Return back our global area of system parameter */
-      if (ext_info->purpose != DISK_TEMPVOL_TEMP_PURPOSE)
-	{
-	  boot_Db_parm->nvols--;
-	  boot_Db_parm->last_volid = volid - 1;
-	}
-      else
-	{
-	  boot_Db_parm->temp_nvols--;
-	  if (boot_Db_parm->temp_nvols <= 0)
-	    {
-	      boot_Db_parm->temp_last_volid = NULL_VOLID;
-	    }
-	  else
-	    {
-	      boot_Db_parm->temp_last_volid = volid + 1;
-	    }
-	}
-      goto error;
-    }
-
-  /* 
-   * Flush both the Dbparm object. This is not needed but it is good to do it,
-   * so that during restart time we can mount every known volume. During media
-   * crash that may not be possible. Thus, this is optional, we do not check
-   * for error values.
-   */
-
-  heap_flush (thread_p, boot_Db_parm_oid);
-  vol_fd = fileio_get_volume_descriptor (boot_Db_parm->hfid.vfid.volid);
-  (void) fileio_synchronize (thread_p, vol_fd, ext_info->name);
-
-  log_end_system_op (thread_p, LOG_RESULT_TOPOP_COMMIT);
-
-  pgbuf_refresh_max_permanent_volume_id (boot_Db_parm->last_volid);
-  csect_exit (thread_p, CSECT_BOOT_SR_DBPARM);
-
-#if !defined(WINDOWS)
-  if (prm_get_bool_value (PRM_ID_DBFILES_PROTECT))
-    {
-      fileio_set_permission (ext_info->name);
-    }
-#endif /* !WINDOWS */
-
-  return volid;
-
-error:
-  if (in_system_op)
-    {
-      (void) log_end_system_op (thread_p, LOG_RESULT_TOPOP_ABORT);
-    }
-
-  pgbuf_refresh_max_permanent_volume_id (boot_Db_parm->last_volid);
-  csect_exit (thread_p, CSECT_BOOT_SR_DBPARM);
-
-  return NULL_VOLID;
-}
-
-/*
-=======
->>>>>>> upstream/develop
  * boot_remove_temp_volume () - remove a volume from the database
  *
  * return : NO_ERROR if all OK, ER_ status otherwise
@@ -789,15 +616,8 @@ boot_remove_temp_volume (THREAD_ENTRY * thread_p, VOLID volid, REMOVE_TEMP_VOL_A
 
   if (delete_action == REMOVE_TEMP_VOL_DEFAULT_ACTION)
     {
-      <<<<<<<HEAD recdes.area_size = recdes.length = DB_SIZEOF (*boot_Db_parm);
-      recdes.data = (char *) boot_Db_parm;
-
-      heap_create_update_context (&update_context, &boot_Db_parm->hfid, boot_Db_parm_oid, &boot_Db_parm->rootclass_oid,
-				  &recdes, NULL, UPDATE_INPLACE_NON_MVCC, false);
-      if (heap_update_logical (thread_p, &update_context) != NO_ERROR)
-	== == == = error_code = boot_db_parm_update_heap (thread_p);
+      error_code = boot_db_parm_update_heap (thread_p);
       if (error_code != NO_ERROR)
-	>>>>>>>upstream / develop
 	{
 	  ASSERT_ERROR ();
 	  boot_Db_parm->temp_nvols++;
@@ -1258,97 +1078,7 @@ boot_remove_all_temp_volumes (THREAD_ENTRY * thread_p, REMOVE_TEMP_VOL_ACTION de
   if (boot_Db_parm->temp_nvols == 0)
     {
       return error_code;
-    <<<<<<<HEAD}
-
-  boot_find_rest_temp_volumes (thread_p, NULL_VOLID, boot_xremove_temp_volume, (void *) &delete_action_arg, true, true);
-
-  if (delete_action == ONLY_PHYSICAL_REMOVE_TEMP_VOL_ACTION)
-    {
-      return error_code;
     }
-
-  if (boot_Db_parm->temp_nvols != 0 || boot_Db_parm->temp_last_volid != NULL_VOLID)
-    {
-      HEAP_OPERATION_CONTEXT update_context;
-      boot_Db_parm->temp_nvols = 0;
-      boot_Db_parm->temp_last_volid = NULL_VOLID;
-      recdes.area_size = recdes.length = DB_SIZEOF (*boot_Db_parm);
-      recdes.data = (char *) boot_Db_parm;
-
-      heap_create_update_context (&update_context, &boot_Db_parm->hfid, boot_Db_parm_oid, &boot_Db_parm->rootclass_oid,
-				  &recdes, NULL, UPDATE_INPLACE_NON_MVCC, false);
-      if (heap_update_logical (thread_p, &update_context) != NO_ERROR
-	  || xtran_server_commit (thread_p, false) != TRAN_UNACTIVE_COMMITTED)
-	{
-	  error_code = ER_FAILED;
-	}
-    }
-  else
-    {
-      if (xtran_server_commit (thread_p, false) != TRAN_UNACTIVE_COMMITTED)
-	{
-	  error_code = ER_FAILED;
-	}
-    }
-
-  return error_code;
-}
-
-#if 0
-/*
- * boot_xremove_prem_volume () - remove the permanent volume from the database
- *
- * return :NO_ERROR if all OK, ER_ status otherwise
- */
-static int
-boot_xremove_perm_volume (THREAD_ENTRY * thread_p, VOLID volid)
-{
-  HEAP_OPERATION_CONTEXT update_context;
-  int error = NO_ERROR;
-  int vol_fd;
-  char *vlabel;
-  RECDES recdes;
-  VOLID prev_volid = NULL_VOLID;
-  VOLID next_volid = NULL_VOLID;
-  char next_vol_fullname[PATH_MAX];
-
-  if (csect_enter (thread_p, CSECT_BOOT_SR_DBPARM, INF_WAIT) != NO_ERROR)
-    {
-      return ER_FAILED;
-    }
-
-  vlabel = fileio_get_volume_label (volid, ALLOC_COPY);
-  if (vlabel == NULL)
-    {
-      csect_exit (thread_p, CSECT_BOOT_SR_DBPARM);
-      return ER_FAILED;
-    }
-
-  prev_volid = fileio_find_previous_perm_volume (thread_p, volid);
-  /* previous volid shouldn't be NULL_VOLID because we can't remove first volume */
-  assert (prev_volid != NULL_VOLID);
-
-  boot_Db_parm->nvols--;
-  if (boot_Db_parm->last_volid == volid)
-    {
-      boot_Db_parm->last_volid = prev_volid;
-    }
-
-  recdes.area_size = recdes.length = DB_SIZEOF (*boot_Db_parm);
-  recdes.data = (char *) boot_Db_parm;
-
-  heap_create_update_context (&update_context, &boot_Db_parm->hfid, boot_Db_parm_oid, &boot_Db_parm->rootclass_oid,
-			      &recdes, NULL, UPDATE_INPLACE_NON_MVCC, false);
-  if (heap_update_logical (thread_p, &update_context) != NO_ERROR)
-    {
-      boot_Db_parm->nvols++;
-      if (boot_Db_parm->last_volid == prev_volid)
-	{
-	  boot_Db_parm->last_volid = volid;
-	}
-      error = er_errid ();
-      goto end;
-    == == == = >>>>>>>upstream / develop}
 
   boot_find_rest_temp_volumes (thread_p, NULL_VOLID, boot_xremove_temp_volume, (void *) &delete_action_arg, true, true);
 
@@ -3127,16 +2857,8 @@ boot_restart_server (THREAD_ENTRY * thread_p, bool print_restart, const char *db
       boot_Db_parm->query_vfid.fileid = NULL_FILEID;
       boot_Db_parm->query_vfid.volid = NULL_VOLID;
 
-      <<<<<<<HEAD recdes.area_size = recdes.length = DB_SIZEOF (*boot_Db_parm);
-      recdes.data = (char *) boot_Db_parm;
-
-      heap_create_update_context (&update_context, &boot_Db_parm->hfid, boot_Db_parm_oid, &boot_Db_parm->rootclass_oid,
-				  &recdes, NULL, UPDATE_INPLACE_NON_MVCC, false);
-      if (heap_update_logical (thread_p, &update_context) != NO_ERROR
-	  || xtran_server_commit (thread_p, false) != TRAN_UNACTIVE_COMMITTED)
-	== == == = error_code = boot_db_parm_update_heap (thread_p);
+      error_code = boot_db_parm_update_heap (thread_p);
       if (error_code != NO_ERROR)
-	>>>>>>>upstream / develop
 	{
 	  ASSERT_ERROR ();
 	  goto error;
@@ -6456,7 +6178,7 @@ boot_db_parm_update_heap (THREAD_ENTRY * thread_p)
   /* hack the class to avoid heap_scancache_check_with_hfid. */
   scan_cache.node.class_oid = *oid_Root_class_oid;
   heap_create_update_context (&update_context, &boot_Db_parm->hfid, boot_Db_parm_oid, &boot_Db_parm->rootclass_oid,
-			      &recdes, &scan_cache, UPDATE_INPLACE_CURRENT_MVCCID);
+			      &recdes, &scan_cache, UPDATE_INPLACE_NON_MVCC, false);
   error_code = heap_update_logical (thread_p, &update_context);
   if (error_code != NO_ERROR)
     {

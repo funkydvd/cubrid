@@ -120,7 +120,7 @@ extern int catcls_compile_catalog_classes (THREAD_ENTRY * thread_p);
 extern int catcls_insert_catalog_classes (THREAD_ENTRY * thread_p, RECDES * record);
 extern int catcls_delete_catalog_classes (THREAD_ENTRY * thread_p, const char *name, OID * class_oid);
 extern int catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name, RECDES * record, OID * class_oid_p,
-					  UPDATE_INPLACE_TYPE update_inplace_type, bool needs_old_header);
+					  bool is_mvcc_update, bool needs_old_header);
 extern int catcls_finalize_class_oid_to_oid_hash_table (THREAD_ENTRY * thread_p);
 extern int catcls_remove_entry (THREAD_ENTRY * thread_p, OID * class_oid);
 extern int catcls_get_server_compat_info (THREAD_ENTRY * thread_p, int *charset_id_p, char *lang_buf,
@@ -164,14 +164,13 @@ static int catcls_put_or_value_into_record (THREAD_ENTRY * thread_p, OR_VALUE * 
 static int catcls_insert_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OID * root_oid);
 static int catcls_delete_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p);
 static int catcls_update_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OR_VALUE * old_value, int *uflag,
-				 UPDATE_INPLACE_TYPE update_inplace_type, bool needs_old_header);
+				 bool is_mvcc_update, bool needs_old_header);
 static int catcls_insert_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OID * oid, OID * root_oid,
 				   OID * class_oid, HFID * hfid, HEAP_SCANCACHE * scan);
 static int catcls_delete_instance (THREAD_ENTRY * thread_p, OID * oid, OID * class_oid, HFID * hfid,
 				   HEAP_SCANCACHE * scan);
 static int catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OID * oid, OID * class_oid, HFID * hfid,
-				   HEAP_SCANCACHE * scan, UPDATE_INPLACE_TYPE update_inplace_type,
-				   bool needs_old_header);
+				   HEAP_SCANCACHE * scan, bool is_mvcc_update, bool needs_old_header);
 static CATCLS_ENTRY *catcls_allocate_entry (THREAD_ENTRY * thread_p);
 static int catcls_free_entry_kv (const void *key, void *data, void *args);
 static int catcls_free_entry (CATCLS_ENTRY * entry_p);
@@ -3685,8 +3684,7 @@ catcls_insert_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OID * oid_p
       goto error;
     }
 
-  heap_create_update_context (&update_context, hfid_p, oid_p, class_oid_p, &record, scan_p,
-			      UPDATE_INPLACE_NON_MVCC, false);
+  heap_create_update_context (&update_context, hfid_p, oid_p, class_oid_p, &record, scan_p, false, false);
   if (heap_update_logical (thread_p, &update_context) != NO_ERROR)
     {
       error = er_errid ();
@@ -3831,12 +3829,12 @@ error:
  *   class_oid(in):
  *   hfid(in):
  *   scan(in):
- *   update_inplace_type(in): the type of the update
+ *   is_mvcc_update(in): the type of the update
  *   needs_old_header: true if context needs old header
  */
 static int
 catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OID * oid_p, OID * class_oid_p, HFID * hfid_p,
-			HEAP_SCANCACHE * scan_p, UPDATE_INPLACE_TYPE update_inplace_type, bool needs_old_header)
+			HEAP_SCANCACHE * scan_p, bool is_mvcc_update, bool needs_old_header)
 {
   RECDES record, old_record;
   OR_VALUE *old_value_p = NULL;
@@ -3901,8 +3899,7 @@ catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OID * oid_p
 		}
 	    }
 
-	  error =
-	    catcls_update_subset (thread_p, &attrs[i], &old_attrs[i], &uflag, update_inplace_type, needs_old_header);
+	  error = catcls_update_subset (thread_p, &attrs[i], &old_attrs[i], &uflag, is_mvcc_update, needs_old_header);
 	  if (error != NO_ERROR)
 	    {
 	      goto error;
@@ -3949,7 +3946,7 @@ catcls_update_instance (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OID * oid_p
 	}
 
       /* update in place */
-      heap_create_update_context (&update_context, hfid_p, oid_p, class_oid_p, &record, scan_p, update_inplace_type,
+      heap_create_update_context (&update_context, hfid_p, oid_p, class_oid_p, &record, scan_p, is_mvcc_update,
 				  needs_old_header);
       if (heap_update_logical (thread_p, &update_context) != NO_ERROR)
 	{
@@ -4137,13 +4134,13 @@ error:
  *   name(in):
  *   record(in):
  *   class_oid_p(in): class OID
- *   update_inplace_type(in): The update of the instance will be made 
+ *   is_mvcc_update(in): The update of the instance will be made 
                               according to provided style and class (MVCC or non MVCC).
  *   needs_old_header: true if context needs old header
  */
 int
 catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p, RECDES * record_p, OID * class_oid_p,
-			       UPDATE_INPLACE_TYPE update_inplace_type, bool needs_old_header)
+			       bool is_mvcc_update, bool needs_old_header)
 {
   OR_VALUE *value_p = NULL;
   OID oid, *catalog_class_oid_p;
@@ -4184,7 +4181,7 @@ catcls_update_catalog_classes (THREAD_ENTRY * thread_p, const char *name_p, RECD
   is_scan_inited = true;
 
   /* update catalog classes */
-  if (catcls_update_instance (thread_p, value_p, &oid, catalog_class_oid_p, hfid_p, &scan, update_inplace_type,
+  if (catcls_update_instance (thread_p, value_p, &oid, catalog_class_oid_p, hfid_p, &scan, is_mvcc_update,
 			      needs_old_header) != NO_ERROR)
     {
       goto error;
@@ -4584,12 +4581,12 @@ exit:
  *   value(in): new values
  *   old_value_p(in): old values 
  *   uflag(in): update necessary flag
- *   update_inplace_type(in): the type of the update
+ *   is_mvcc_update(in): the type of the update
  *   needs_old_header: true if context needs old header
  */
 static int
 catcls_update_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OR_VALUE * old_value_p, int *uflag,
-		      UPDATE_INPLACE_TYPE update_inplace_type, bool needs_old_header)
+		      bool is_mvcc_update, bool needs_old_header)
 {
   OR_VALUE *subset_p = NULL, *old_subset_p = NULL;
   DB_SET *oid_set_p = NULL;
@@ -4687,7 +4684,7 @@ catcls_update_subset (THREAD_ENTRY * thread_p, OR_VALUE * value_p, OR_VALUE * ol
 	}
 
       oid_p = DB_PULL_OID (&oid_val);
-      error = catcls_update_instance (thread_p, &subset_p[i], oid_p, class_oid_p, hfid_p, &scan, update_inplace_type,
+      error = catcls_update_instance (thread_p, &subset_p[i], oid_p, class_oid_p, hfid_p, &scan, is_mvcc_update,
 				      needs_old_header);
       if (error != NO_ERROR)
 	{

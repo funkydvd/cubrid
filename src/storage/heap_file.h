@@ -261,12 +261,6 @@ typedef enum
   HEAP_OPERATION_UPDATE
 } HEAP_OPERATION_TYPE;
 
-typedef enum update_inplace_type UPDATE_INPLACE_TYPE;
-enum update_inplace_type
-{
-  UPDATE_INPLACE_MVCC = 0,	/* MVCC update */
-  UPDATE_INPLACE_NON_MVCC = 1	/* non-MVCC update */
-};
 
 /* heap operation information structure */
 typedef struct heap_operation_context HEAP_OPERATION_CONTEXT;
@@ -274,7 +268,7 @@ struct heap_operation_context
 {
   /* heap operation type */
   HEAP_OPERATION_TYPE type;
-  UPDATE_INPLACE_TYPE update_in_place;
+  bool is_mvcc_update;
 
   /* logical operation input */
   HFID hfid;			/* heap file identifier */
@@ -624,7 +618,7 @@ extern void heap_create_insert_context (HEAP_OPERATION_CONTEXT * context, HFID *
 extern void heap_create_delete_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID * oid_p, OID * class_oid_p,
 					HEAP_SCANCACHE * scancache_p);
 extern void heap_create_update_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID * oid_p, OID * class_oid_p,
-					RECDES * recdes_p, HEAP_SCANCACHE * scancache_p, UPDATE_INPLACE_TYPE in_place,
+					RECDES * recdes_p, HEAP_SCANCACHE * scancache_p, bool is_mvcc_update,
 					bool needs_old_header);
 extern int heap_insert_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context);
 extern int heap_delete_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context);

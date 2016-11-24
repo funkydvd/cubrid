@@ -166,10 +166,10 @@ static int rv;
   while (0)
 
 #if defined (SERVER_MODE)
-#define HEAP_UPDATE_IS_MVCC_OP(is_mvcc_class, update_style) \
-    ((is_mvcc_class) &&  (update_style==UPDATE_INPLACE_MVCC) )
+#define HEAP_UPDATE_IS_MVCC_OP(is_mvcc_class, is_mvcc_update) \
+    ((is_mvcc_class) &&  (is_mvcc_update) )
 #else
-#define HEAP_UPDATE_IS_MVCC_OP(is_mvcc_class, update_style) (false)
+#define HEAP_UPDATE_IS_MVCC_OP(is_mvcc_class, is_mvcc_update) (false)
 #endif
 
 #define HEAP_SCAN_ORDERED_HFID(scan) \
@@ -17213,7 +17213,7 @@ heap_object_upgrade_domain (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * upd_scanca
     locator_attribute_info_force (thread_p, &upd_scancache->node.hfid, oid, attr_info, atts_id, updated_n_attrs_id,
 				  LC_FLUSH_UPDATE, SINGLE_ROW_UPDATE, upd_scancache, &force_count, false,
 				  REPL_INFO_TYPE_RBR_NORMAL, DB_NOT_PARTITIONED_CLASS, NULL, NULL, NULL,
-				  UPDATE_INPLACE_NON_MVCC, NULL, false, true);
+				  false, NULL, false, true);
   if (error != NO_ERROR)
     {
       if (error == ER_MVCC_NOT_SATISFIED_REEVALUATION)
@@ -19441,7 +19441,7 @@ heap_clear_operation_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p)
 
   /* nullify everything else */
   context->type = HEAP_OPERATION_NONE;
-  context->update_in_place = UPDATE_INPLACE_MVCC;
+  context->is_mvcc_update = true;
   OID_SET_NULL (&context->oid);
   OID_SET_NULL (&context->class_oid);
   context->recdes_p = NULL;
@@ -19774,7 +19774,7 @@ heap_insert_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
   repid_and_flag_bits = OR_GET_MVCC_REPID_AND_FLAG (insert_context->recdes_p->data);
   mvcc_flags = (repid_and_flag_bits >> OR_MVCC_FLAG_SHIFT_BITS) & OR_MVCC_FLAG_MASK;
 
-  is_mvcc_op = HEAP_UPDATE_IS_MVCC_OP (is_mvcc_class, insert_context->update_in_place);
+  is_mvcc_op = HEAP_UPDATE_IS_MVCC_OP (is_mvcc_class, insert_context->is_mvcc_update);
 #if defined (SERVER_MODE)
   /* In case of partitions, it is possible to have OR_MVCC_FLAG_VALID_PREV_VERSION flag. */
   use_optimization = (is_mvcc_op && (!(mvcc_flags & OR_MVCC_FLAG_VALID_PREV_VERSION))
@@ -19784,7 +19784,7 @@ heap_insert_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
   if (use_optimization)
     {
       /* 
-       * Most common case. Since is UPDATE_INPLACE_MVCC, the header does not have DELID.
+       * Most common case. Since is mvcc update, the header does not have DELID.
        * Optimize header adjustment.
        */
       assert (!(mvcc_flags & OR_MVCC_FLAG_VALID_DELID));
@@ -19882,7 +19882,7 @@ heap_update_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
   mvcc_flags = (repid_and_flag_bits >> OR_MVCC_FLAG_SHIFT_BITS) & OR_MVCC_FLAG_MASK;
   update_mvcc_flags = OR_MVCC_FLAG_VALID_INSID | OR_MVCC_FLAG_VALID_PREV_VERSION;
 
-  is_mvcc_op = HEAP_UPDATE_IS_MVCC_OP (is_mvcc_class, update_context->update_in_place);
+  is_mvcc_op = HEAP_UPDATE_IS_MVCC_OP (is_mvcc_class, update_context->is_mvcc_update);
 #if defined (SERVER_MODE)
   use_optimization = (is_mvcc_op && !heap_is_big_length (record_size + OR_MVCCID_SIZE + OR_MVCC_PREV_VERSION_LSA_SIZE));
 #endif
@@ -19890,7 +19890,7 @@ heap_update_adjust_recdes_header (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEX
   if (use_optimization)
     {
       /*
-       * Most common case. Since is UPDATE_INPLACE_MVCC, the header does not have DELID.
+       * Most common case. Since is mvcc update, the header does not have DELID.
        * Optimize header adjustment.
        */
       assert (!(mvcc_flags & OR_MVCC_FLAG_VALID_DELID));
@@ -22022,7 +22022,7 @@ heap_update_home (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context, boo
   assert (context->home_page_watcher_p->pgptr != NULL);
   assert (context->forward_page_watcher_p != NULL);
 
-  if (context->update_in_place == UPDATE_INPLACE_MVCC && context->home_recdes.type == REC_ASSIGN_ADDRESS)
+  if (context->is_mvcc_update == true && context->home_recdes.type == REC_ASSIGN_ADDRESS)
     {
       /* updating a REC_ASSIGN_ADDRESS should be done as a non-mvcc operation */
       assert (false);
@@ -22348,13 +22348,12 @@ heap_create_delete_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID
  *   class_oid_p(in): class OID
  *   recdes_p(in): updated record to write
  *   scancache_p(in): scan cache to use (optional)
- *   update_inplace_type(in): specifies the type of the update operation
+ *   is_mvcc_update(in): specifies the type of the update operation
  *   needs_old_header: true if context needs old header
  */
 void
 heap_create_update_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID * oid_p, OID * class_oid_p,
-			    RECDES * recdes_p, HEAP_SCANCACHE * scancache_p, UPDATE_INPLACE_TYPE update_inplace_type,
-			    bool needs_old_header)
+			    RECDES * recdes_p, HEAP_SCANCACHE * scancache_p, bool is_mvcc_update, bool needs_old_header)
 {
   assert (context != NULL);
   assert (hfid_p != NULL);
@@ -22368,7 +22367,7 @@ heap_create_update_context (HEAP_OPERATION_CONTEXT * context, HFID * hfid_p, OID
   context->recdes_p = recdes_p;
   context->scan_cache_p = scancache_p;
   context->type = HEAP_OPERATION_UPDATE;
-  context->update_in_place = update_inplace_type;
+  context->is_mvcc_update = is_mvcc_update;
   context->needs_old_header = needs_old_header;
 }
 
@@ -22809,9 +22808,9 @@ heap_update_logical (THREAD_ENTRY * thread_p, HEAP_OPERATION_CONTEXT * context)
   /* 
    * Determine type of operation
    */
-  is_mvcc_op = HEAP_UPDATE_IS_MVCC_OP (is_mvcc_class, context->update_in_place);
+  is_mvcc_op = HEAP_UPDATE_IS_MVCC_OP (is_mvcc_class, context->is_mvcc_update);
 #if defined (SERVER_MODE)
-  assert ((!is_mvcc_op && context->update_in_place != UPDATE_INPLACE_MVCC) || (is_mvcc_op));
+  assert ((!is_mvcc_op && context->is_mvcc_update != true) || (is_mvcc_op));
 #endif /* SERVER_MODE */
 
 #if defined(ENABLE_SYSTEMTAP)

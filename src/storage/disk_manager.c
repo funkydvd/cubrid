@@ -441,6 +441,7 @@ STATIC_INLINE int disk_get_volheader_internal (THREAD_ENTRY * thread_p, VOLID vo
 #endif /* !NDEBUG */
 
 static int disk_cache_init (void);
+static void disk_cache_final (void);
 STATIC_INLINE bool disk_is_valid_volid (VOLID volid) __attribute__ ((ALWAYS_INLINE));
 STATIC_INLINE DB_VOLPURPOSE disk_get_volpurpose (VOLID volid) __attribute__ ((ALWAYS_INLINE));
 STATIC_INLINE DB_VOLTYPE disk_get_voltype (VOLID volid) __attribute__ ((ALWAYS_INLINE));
@@ -769,7 +770,7 @@ disk_set_creation (THREAD_ENTRY * thread_p, INT16 volid, const char *new_vol_ful
 		   const LOG_LSA * new_chkptlsa, bool logchange, DISK_FLUSH_TYPE flush)
 {
   DISK_VOLUME_HEADER *vhdr = NULL;
-  LOG_DATA_ADDR addr;
+  LOG_DATA_ADDR addr = LOG_DATA_ADDR_INITIALIZER;
   DISK_RECV_CHANGE_CREATION *undo_recv;
   DISK_RECV_CHANGE_CREATION *redo_recv;
   int error_code = NO_ERROR;
@@ -888,7 +889,7 @@ disk_set_link (THREAD_ENTRY * thread_p, INT16 volid, INT16 next_volid, const cha
 	       DISK_FLUSH_TYPE flush)
 {
   DISK_VOLUME_HEADER *vhdr;
-  LOG_DATA_ADDR addr;
+  LOG_DATA_ADDR addr = LOG_DATA_ADDR_INITIALIZER;
   VPID vpid;
   DISK_RECV_LINK_PERM_VOLUME *undo_recv;
   DISK_RECV_LINK_PERM_VOLUME *redo_recv;
@@ -1921,6 +1922,7 @@ disk_add_volume_extension (THREAD_ENTRY * thread_p, DB_VOLPURPOSE purpose, DKNPA
     {
       ASSERT_ERROR ();
       disk_unlock_extend ();
+      csect_exit (thread_p, CSECT_DISK_CHECK);
       return error_code;
     }
   assert (volid_new == disk_Cache->nvols_perm);
@@ -1937,6 +1939,7 @@ disk_add_volume_extension (THREAD_ENTRY * thread_p, DB_VOLPURPOSE purpose, DKNPA
 
   /* unblock expand */
   disk_unlock_extend ();
+  csect_exit (thread_p, CSECT_DISK_CHECK);
 
   assert (disk_is_valid_volid (volid_new));
 
@@ -1999,7 +2002,7 @@ disk_volume_boot (THREAD_ENTRY * thread_p, VOLID volid, DB_VOLPURPOSE * purpose_
 	  ASSERT_ERROR ();
 	  goto exit;
 	}
-      space_out->n_free_sects = space_out->n_total_sects - SECTOR_FROM_PAGEID (volheader->sys_lastpage);
+      space_out->n_free_sects = space_out->n_total_sects - SECTOR_FROM_PAGEID (volheader->sys_lastpage) - 1;
     }
   else
     {
@@ -2058,7 +2061,7 @@ disk_cache_load_volume (THREAD_ENTRY * thread_p, INT16 volid, void *ignore)
 {
   DB_VOLPURPOSE vol_purpose;
   DB_VOLTYPE vol_type;
-  VOL_SPACE_INFO space_info;
+  VOL_SPACE_INFO space_info = VOL_SPACE_INFO_INITIALIZER;
 
   if (disk_volume_boot (thread_p, volid, &vol_purpose, &vol_type, &space_info) != NO_ERROR)
     {
@@ -2169,6 +2172,29 @@ disk_cache_init (void)
       disk_Cache->vols[i].nsect_free = 0;
     }
   return NO_ERROR;
+}
+
+/*
+ * disk_cache_final () - finalize disk cache
+ */
+static void
+disk_cache_final (void)
+{
+  if (disk_Cache == NULL)
+    {
+      /* not initialized */
+      return;
+    }
+
+  assert (disk_Cache->perm_purpose_info.extend_info.owner_reserve == -1);
+  assert (disk_Cache->temp_purpose_info.extend_info.owner_reserve == -1);
+  assert (disk_Cache->owner_extend == -1);
+
+  pthread_mutex_destroy (&disk_Cache->perm_purpose_info.extend_info.mutex_reserve);
+  pthread_mutex_destroy (&disk_Cache->temp_purpose_info.extend_info.mutex_reserve);
+  pthread_mutex_destroy (&disk_Cache->mutex_extend);
+
+  free_and_init (disk_Cache);
 }
 
 /*
@@ -3343,6 +3369,7 @@ disk_rv_reserve_sectors (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 	{
 	  /* should not fail */
 	  assert_release (false);
+	  csect_exit (thread_p, CSECT_DISK_CHECK);
 	  return ER_FAILED;
 	}
     }
@@ -3419,6 +3446,7 @@ disk_rv_unreserve_sectors (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 	{
 	  /* should not fail */
 	  assert_release (false);
+	  csect_exit (thread_p, CSECT_DISK_CHECK);
 	  return ER_FAILED;
 	}
     }
@@ -4279,6 +4307,13 @@ disk_stab_init (THREAD_ENTRY * thread_p, DISK_VOLUME_HEADER * volheader)
   return NO_ERROR;
 }
 
+/*
+ * disk_manager_init () - load disk manager and allocate all required resources
+ *
+ * return              : error code
+ * thread_p (in)       : thread entry
+ * load_from_disk (in) : true to also populate disk cache with volume info
+ */
 int
 disk_manager_init (THREAD_ENTRY * thread_p, bool load_from_disk)
 {
@@ -4296,6 +4331,11 @@ disk_manager_init (THREAD_ENTRY * thread_p, bool load_from_disk)
 
   disk_Logging = prm_get_bool_value (PRM_ID_DISK_LOGGING);
 
+  if (disk_Cache != NULL)
+    {
+      disk_log ("disk_manager_init", "%s", "reload disk cache");
+      disk_cache_final ();
+    }
   error_code = disk_cache_init ();
   if (error_code != NO_ERROR)
     {
@@ -4313,24 +4353,13 @@ disk_manager_init (THREAD_ENTRY * thread_p, bool load_from_disk)
   return NO_ERROR;
 }
 
+/*
+ * disk_manager_final () - free disk manager resources
+ */
 void
 disk_manager_final (void)
 {
-  if (disk_Cache == NULL)
-    {
-      /* not initialized */
-      return;
-    }
-
-  assert (disk_Cache->perm_purpose_info.extend_info.owner_reserve == -1);
-  assert (disk_Cache->temp_purpose_info.extend_info.owner_reserve == -1);
-  assert (disk_Cache->owner_extend == -1);
-
-  pthread_mutex_destroy (&disk_Cache->perm_purpose_info.extend_info.mutex_reserve);
-  pthread_mutex_destroy (&disk_Cache->temp_purpose_info.extend_info.mutex_reserve);
-  pthread_mutex_destroy (&disk_Cache->mutex_extend);
-
-  free_and_init (disk_Cache);
+  disk_cache_final ();
 }
 
 /*
@@ -4897,6 +4926,9 @@ xdisk_get_purpose_and_space_info (THREAD_ENTRY * thread_p, VOLID volid, DISK_VOL
       /* we don't cache total/max sectors */
       PAGE_PTR page_volheader;
       DISK_VOLUME_HEADER *volheader;
+
+      space_info->max_pages = space_info->total_pages = space_info->free_pages = 0;
+      space_info->used_data_npages = space_info->used_index_npages = space_info->used_temp_npages = 0;
 
       error_code = disk_get_volheader (thread_p, volid, PGBUF_LATCH_READ, &page_volheader, &volheader);
       if (error_code != NO_ERROR)
@@ -5620,11 +5652,11 @@ disk_map_clone_create (THREAD_ENTRY * thread_p, DISK_VOLMAP_CLONE ** disk_map_cl
 	  goto exit;
 	}
 
-      disk_map_clone[iter]->size_map = volheader->nsect_total / CHAR_BIT;
-      disk_map_clone[iter]->map = (char *) malloc (disk_map_clone[iter]->size_map);
-      if (disk_map_clone[iter]->map == NULL)
+      (*disk_map_clone)[iter].size_map = volheader->nsect_total / CHAR_BIT;
+      (*disk_map_clone)[iter].map = (char *) malloc ((*disk_map_clone)[iter].size_map);
+      if ((*disk_map_clone)[iter].map == NULL)
 	{
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, disk_map_clone[iter]->size_map);
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, (*disk_map_clone)[iter].size_map);
 	  error_code = ER_OUT_OF_VIRTUAL_MEMORY;
 	  goto exit;
 	}
@@ -5632,7 +5664,7 @@ disk_map_clone_create (THREAD_ENTRY * thread_p, DISK_VOLMAP_CLONE ** disk_map_cl
       /* copy map */
       vpid_stab.volid = iter;
       vpid_stab.pageid = volheader->stab_first_page;
-      ptr_map = disk_map_clone[iter]->map;
+      ptr_map = (*disk_map_clone)[iter].map;
       for (nsects = volheader->nsect_total; nsects >= 0; nsects -= DISK_STAB_PAGE_BIT_COUNT)
 	{
 	  memsize = MIN (DB_PAGESIZE, nsects / CHAR_BIT);
@@ -5651,11 +5683,11 @@ disk_map_clone_create (THREAD_ENTRY * thread_p, DISK_VOLMAP_CLONE ** disk_map_cl
 	  ptr_map += memsize;
 	  vpid_stab.pageid++;
 	}
-      assert (ptr_map == disk_map_clone[iter]->map + disk_map_clone[iter]->size_map);
+      assert (ptr_map == (*disk_map_clone)[iter].map + (*disk_map_clone)[iter].size_map);
       assert (vpid_stab.pageid <= volheader->stab_first_page + volheader->stab_npages);
 
       /* clear sectors used by system */
-      ptr_map = disk_map_clone[iter]->map;
+      ptr_map = (*disk_map_clone)[iter].map;
       for (nsects = SECTOR_FROM_PAGEID (volheader->sys_lastpage) + 1; nsects >= DISK_STAB_UNIT_BIT_COUNT;
 	   nsects -= DISK_STAB_UNIT_BIT_COUNT)
 	{
@@ -5701,7 +5733,7 @@ disk_map_clone_free (DISK_VOLMAP_CLONE ** disk_map_clone)
 
   for (iter = 0; iter < disk_Cache->nvols_perm; iter++)
     {
-      free (disk_map_clone[iter]->map);
+      free ((*disk_map_clone)[iter].map);
     }
   free_and_init (*disk_map_clone);
 }
@@ -5720,7 +5752,7 @@ disk_map_clone_clear (VSID * vsid, DISK_VOLMAP_CLONE * disk_map_clone)
   int offset_bit = vsid->sectid % DISK_STAB_UNIT_BIT_COUNT;
   DISK_STAB_UNIT *unit = ((DISK_STAB_UNIT *) disk_map_clone[vsid->volid].map) + offset_unit;
 
-  if (vsid->sectid > disk_map_clone->size_map * CHAR_BIT)
+  if (vsid->sectid > disk_map_clone[vsid->volid].size_map * CHAR_BIT)
     {
       /* overflow */
       assert_release (false);
@@ -5753,8 +5785,8 @@ disk_map_clone_check_leaks (DISK_VOLMAP_CLONE * disk_map_clone)
 
   for (volid = 0; volid < disk_Cache->nvols_perm; volid++)
     {
-      for (unit = (DISK_STAB_UNIT *) disk_map_clone->map;
-	   (char *) unit < disk_map_clone->map + disk_map_clone->size_map; unit++)
+      for (unit = (DISK_STAB_UNIT *) disk_map_clone[volid].map;
+	   (char *) unit < disk_map_clone[volid].map + disk_map_clone[volid].size_map; unit++)
 	{
 	  if (*unit != 0)
 	    {

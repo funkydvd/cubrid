@@ -1170,6 +1170,7 @@ int g_original_buffer_len;
 %token File
 %token FIRST
 %token FLOAT_
+%token JSON_
 %token For
 %token FORCE
 %token FOREIGN
@@ -18488,6 +18489,12 @@ primitive_type
 			$$ = ctn;
 
 		DBG_PRINT}}
+	| JSON_
+		{{
+			container_2 ctn;
+			SET_CONTAINER_2 (ctn, FROM_NUMBER (PT_TYPE_JSON), NULL);
+			$$ = ctn;
+		}}
 	| TIMESTAMP
 		{{
 

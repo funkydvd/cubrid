@@ -1371,6 +1371,8 @@ pt_type_enum_to_db_domain_name (const PT_TYPE_ENUM t)
     case PT_TYPE_NUMERIC:
       name = "numeric";
       break;
+    case PT_TYPE_JSON:
+      name = "json";
     case PT_TYPE_FLOAT:
       name = "float";
       break;
@@ -2203,7 +2205,9 @@ pt_type_enum_to_db (const PT_TYPE_ENUM t)
     case PT_TYPE_DOUBLE:
       db_type = DB_TYPE_DOUBLE;
       break;
-
+    case PT_TYPE_JSON:
+      db_type = DB_TYPE_JSON;
+      break;
     case PT_TYPE_DATE:
       db_type = DB_TYPE_DATE;
       break;
@@ -2485,6 +2489,8 @@ pt_db_to_type_enum (const DB_TYPE t)
     case DB_TYPE_SHORT:
       pt_type = PT_TYPE_SMALLINT;
       break;
+    case DB_TYPE_JSON:
+      pt_type = PT_TYPE_JSON;
     case DB_TYPE_FLOAT:
       pt_type = PT_TYPE_FLOAT;
       break;

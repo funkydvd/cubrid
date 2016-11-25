@@ -3962,6 +3962,8 @@ pt_show_type_enum (PT_TYPE_ENUM t)
       return "bigint";
     case PT_TYPE_SMALLINT:
       return "smallint";
+    case PT_TYPE_JSON:
+      return "json";
     case PT_TYPE_NUMERIC:
       return "numeric";
     case PT_TYPE_FLOAT:

@@ -616,6 +616,7 @@ int yybuffer_pos;
 										return RANGE_; }
 [rR][eE][aA][dD]							{ begin_token(yytext);   return READ; }
 [rR][eE][aA][lL]							{ begin_token(yytext);   return FLOAT_; }
+[jJ][sS][oO][nN][rR][oO][wW]							{ begin_token(yytext);   return JSON_; }
 [rR][eE][bB][uU][iI][lL][dD] 						{ begin_token(yytext);   return REBUILD; }
 [rR][eE][cC][uU][rR][sS][iI][vV][eE]					{ begin_token(yytext);   return RECURSIVE; }
 [rR][eE][fF]								{ begin_token(yytext);   return REF; }

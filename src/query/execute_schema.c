@@ -12358,6 +12358,8 @@ get_hard_default_for_type (PT_TYPE_ENUM type)
 {
   static const char *zero = "0";
   static const char *empty_str = "''";
+
+  static const char *empty_json = "{}";
   static const char *empty_n_str = "N''";
   static const char *empty_bit = "b'0'";
   static const char *empty_date = "DATE '01/01/0001'";
@@ -12412,7 +12414,8 @@ get_hard_default_for_type (PT_TYPE_ENUM type)
     case PT_TYPE_CHAR:
     case PT_TYPE_VARCHAR:
       return empty_str;
-
+    case PT_TYPE_JSON:
+      return empty_json;
     case PT_TYPE_VARNCHAR:
     case PT_TYPE_NCHAR:
       return empty_n_str;

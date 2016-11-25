@@ -987,6 +987,7 @@ enum pt_type_enum
   /* Disabled type : kept here to minimize code changes */
   PT_TYPE_TIMETZ,
   PT_TYPE_TIMELTZ,
+  PT_TYPE_JSON,
 };
 
 /* Enumerated priviledges for Grant, Revoke */

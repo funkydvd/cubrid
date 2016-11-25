@@ -12986,7 +12986,7 @@ redistribute_partition_data (THREAD_ENTRY * thread_p, OID * class_oid, int no_oi
 	      error =
 		locator_insert_force (thread_p, &class_hfid, &cls_oid, &oid, &recdes, true, SINGLE_ROW_INSERT,
 				      &parent_scan_cache, &force_count, DB_PARTITIONED_CLASS, &pcontext, NULL,
-				      false, true);
+				      false, NEEDS_OLD_HEADER);
 	      if (error != NO_ERROR)
 		{
 		  goto exit;

@@ -58,6 +58,8 @@
 
 #define HEAP_HEADER_AND_CHAIN_SLOTID  0	/* Slot for chain and header */
 
+#define NEEDS_OLD_HEADER true
+
 #define HEAP_MAX_ALIGN INT_ALIGNMENT	/* maximum alignment for heap record */
 
 #define HEAP_ISJUNK_OID(oid) \

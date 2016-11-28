@@ -4144,7 +4144,7 @@ heap_vpid_alloc (THREAD_ENTRY * thread_p, const HFID * hfid, PAGE_PTR hdr_pgptr,
   HEAP_PAGE_SET_VACUUM_STATUS (&new_page_chain, HEAP_PAGE_VACUUM_NONE);
 
   /* allocate new page and initialize it */
-  error_code = file_alloc_and_init (thread_p, &hfid->vfid, heap_vpid_init_new, &new_page_chain, &vpid);
+  error_code = file_alloc (thread_p, &hfid->vfid, heap_vpid_init_new, &new_page_chain, &vpid, NULL);
   if (error_code != NO_ERROR)
     {
       ASSERT_ERROR ();
@@ -4629,13 +4629,13 @@ heap_remove_page_on_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_ptr, HFID *
   /* recheck the dealloc flag after all latches are acquired */
   if (pgbuf_has_prevent_dealloc (crt_watcher.pgptr))
     {
-      assert (pgbuf_has_any_waiters (crt_watcher.pgptr) == false);
       /* Even though we have fixed all required pages, somebody was doing a heap scan, and already reached our page. We 
        * cannot deallocate it. */
       vacuum_er_log (VACUUM_ER_LOG_HEAP | VACUUM_ER_LOG_WARNING,
 		     "VACUUM: Candidate heap page %d|%d to remove has waiters.\n", page_vpid.volid, page_vpid.pageid);
       goto error;
     }
+  assert (pgbuf_has_any_waiters (crt_watcher.pgptr) == false);
 
   /* Start changes under the protection of system operation. */
   log_sysop_start (thread_p);
@@ -5023,6 +5023,7 @@ heap_create_internal (THREAD_ENTRY * thread_p, HFID * hfid, const OID * class_oi
   int i;
   FILE_HEAP_DES hfdes;
   const FILE_TYPE file_type = reuse_oid ? FILE_HEAP_REUSE_SLOTS : FILE_HEAP;
+  PAGE_TYPE ptype = PAGE_HEAP;
 
   int error_code = NO_ERROR;
 
@@ -5099,7 +5100,8 @@ heap_create_internal (THREAD_ENTRY * thread_p, HFID * hfid, const OID * class_oi
       ASSERT_ERROR ();
       goto error;
     }
-  error_code = file_alloc_sticky_first_page (thread_p, &hfid->vfid, &vpid);
+  error_code = file_alloc_sticky_first_page (thread_p, &hfid->vfid, file_init_page_type, &ptype, &vpid,
+					     &addr_hdr.pgptr);
   if (error_code != NO_ERROR)
     {
       ASSERT_ERROR ();
@@ -5112,12 +5114,10 @@ heap_create_internal (THREAD_ENTRY * thread_p, HFID * hfid, const OID * class_oi
       error_code = ER_FAILED;
       goto error;
     }
-
-  addr_hdr.pgptr = pgbuf_fix (thread_p, &vpid, NEW_PAGE, PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
   if (addr_hdr.pgptr == NULL)
     {
       /* something went wrong, destroy the file, and return */
-      ASSERT_ERROR_AND_SET (error_code);
+      assert_release (false);
       goto error;
     }
 
@@ -17119,10 +17119,12 @@ heap_object_upgrade_domain (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * upd_scanca
 	    {
 	      set_default_value = true;
 	    }
+	  /* clear the error */
+	  er_clear ();
 
 	  log_warning = true;
 
-	  /* the casted value will be overwriten, so a clear is needed, here */
+	  /* the casted value will be overwritten, so a clear is needed, here */
 	  pr_clear_value (&(value->dbvalue));
 
 	  if (set_max_value)
@@ -23389,6 +23391,7 @@ heap_hfid_cache_get (THREAD_ENTRY * thread_p, const OID * class_oid, HFID * hfid
 	  assert_release (false);
 	  boot_find_root_heap (&entry->hfid);
 	  entry->ftype = FILE_HEAP;
+	  lf_tran_end_with_mb (t_entry);
 	  return NO_ERROR;
 	}
 
@@ -23399,6 +23402,7 @@ heap_hfid_cache_get (THREAD_ENTRY * thread_p, const OID * class_oid, HFID * hfid
       if (error_code != NO_ERROR)
 	{
 	  ASSERT_ERROR ();
+	  lf_tran_end_with_mb (t_entry);
 	  return error_code;
 	}
       entry->hfid = hfid_local;
@@ -23412,6 +23416,7 @@ heap_hfid_cache_get (THREAD_ENTRY * thread_p, const OID * class_oid, HFID * hfid
       if (error_code != NO_ERROR)
 	{
 	  ASSERT_ERROR ();
+	  lf_tran_end_with_mb (t_entry);
 	  return error_code;
 	}
       entry->ftype = ftype_local;

@@ -1373,6 +1373,7 @@ pt_type_enum_to_db_domain_name (const PT_TYPE_ENUM t)
       break;
     case PT_TYPE_JSON:
       name = "json";
+      break;
     case PT_TYPE_FLOAT:
       name = "float";
       break;
@@ -1546,6 +1547,7 @@ pt_type_enum_to_db_domain (const PT_TYPE_ENUM t)
     case DB_TYPE_VARCHAR:
     case DB_TYPE_VARNCHAR:
     case DB_TYPE_VARBIT:
+    case DB_TYPE_JSON:
       /* Note that we assume that some other force is going to come in and repair the precision of the destination of
        * this domain is for the schema manager.  Might be a problem . . . */
       retval = tp_domain_construct (domain_type, NULL, TP_FLOATING_PRECISION_VALUE, 0, NULL);
@@ -2491,6 +2493,7 @@ pt_db_to_type_enum (const DB_TYPE t)
       break;
     case DB_TYPE_JSON:
       pt_type = PT_TYPE_JSON;
+      break;
     case DB_TYPE_FLOAT:
       pt_type = PT_TYPE_FLOAT;
       break;

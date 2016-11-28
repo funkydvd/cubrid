@@ -653,7 +653,7 @@ db_value_domain_max (DB_VALUE * value, const DB_TYPE type, const int precision, 
     case DB_TYPE_VARCHAR:
     case DB_TYPE_NCHAR:
     case DB_TYPE_VARNCHAR:
-      /* Case for the maximum String type. Just set the is_max_string flag to TRUE. */
+
       value->data.ch.info.style = MEDIUM_STRING;
       value->data.ch.info.codeset = codeset;
       value->data.ch.info.is_max_string = true;
@@ -664,6 +664,8 @@ db_value_domain_max (DB_VALUE * value, const DB_TYPE type, const int precision, 
       value->data.ch.medium.compressed_size = 0;
       value->domain.general_info.is_null = 0;
       value->domain.char_info.collation_id = collation_id;
+      break;
+    case DB_TYPE_JSON:
       break;
     case DB_TYPE_ENUMERATION:
       if (enumeration == NULL || enumeration->count <= 0)
@@ -804,6 +806,7 @@ db_value_domain_default (DB_VALUE * value, const DB_TYPE type, const int precisi
       break;
     case DB_TYPE_NCHAR:
     case DB_TYPE_VARNCHAR:
+
       value->data.ch.info.style = MEDIUM_STRING;
       value->data.ch.info.codeset = codeset;
       value->data.ch.info.compressed_need_clear = false;
@@ -814,6 +817,8 @@ db_value_domain_default (DB_VALUE * value, const DB_TYPE type, const int precisi
       value->data.ch.medium.compressed_size = 0;
       value->domain.general_info.is_null = 0;
       value->domain.char_info.collation_id = collation_id;
+      break;
+    case DB_TYPE_JSON:
       break;
     case DB_TYPE_ENUMERATION:
       db_make_enumeration (value, 0, NULL, 0, codeset, collation_id);
@@ -3540,6 +3545,7 @@ db_type_to_db_domain (const DB_TYPE type)
     case DB_TYPE_BIT:
     case DB_TYPE_VARCHAR:
     case DB_TYPE_VARNCHAR:
+    case DB_TYPE_JSON:
     case DB_TYPE_VARBIT:
     case DB_TYPE_SET:
     case DB_TYPE_MULTISET:

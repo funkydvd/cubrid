@@ -981,13 +981,12 @@ enum pt_type_enum
   PT_TYPE_TIMESTAMPTZ,
   PT_TYPE_DATETIMETZ,
   PT_TYPE_DATETIMELTZ,
-
+  PT_TYPE_JSON,
   PT_TYPE_MAX,
 
   /* Disabled type : kept here to minimize code changes */
   PT_TYPE_TIMETZ,
-  PT_TYPE_TIMELTZ,
-  PT_TYPE_JSON,
+  PT_TYPE_TIMELTZ
 };
 
 /* Enumerated priviledges for Grant, Revoke */

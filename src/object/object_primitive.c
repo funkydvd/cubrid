@@ -1317,6 +1317,33 @@ PR_TYPE tp_Datetimeltz = {
 
 PR_TYPE *tp_Type_datetimeltz = &tp_Datetimeltz;
 
+PR_TYPE tp_Json = {
+  "json", DB_TYPE_JSON, 1, sizeof (const char *), 0,
+  1,
+  help_fprint_value,
+  help_sprint_value,
+  mr_initmem_varnchar,
+  mr_initval_varnchar,
+  mr_setmem_varnchar,
+  mr_getmem_varnchar,
+  mr_setval_varnchar,
+  mr_data_lengthmem_varnchar,
+  mr_data_lengthval_varnchar,
+  mr_data_writemem_varnchar,
+  mr_data_readmem_varnchar,
+  mr_data_writeval_varnchar,
+  mr_data_readval_varnchar,
+  mr_index_lengthmem_varnchar,
+  mr_index_lengthval_varnchar,
+  mr_index_writeval_varnchar,
+  mr_index_readval_varnchar,
+  mr_index_cmpdisk_varnchar,
+  mr_freemem_varnchar,
+  mr_data_cmpdisk_varnchar,
+  mr_cmpval_varnchar
+};
+PR_TYPE *tp_Type_json = &tp_Json;
+
 PR_TYPE tp_Monetary = {
   "monetary", DB_TYPE_MONETARY, 0, sizeof (DB_MONETARY), OR_MONETARY_SIZE, 4,
   help_fprint_value,
@@ -1868,6 +1895,7 @@ PR_TYPE *tp_Type_id_map[] = {
   &tp_Timestampltz,
   &tp_Datetimetz,
   &tp_Datetimeltz,
+  &tp_Json,
   &tp_Timetz,
   &tp_Timeltz
 };

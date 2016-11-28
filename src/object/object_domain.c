@@ -331,6 +331,10 @@ TP_DOMAIN tp_VarNChar_domain = { NULL, NULL, &tp_VarNChar, DB_MAX_VARNCHAR_PRECI
   DOMAIN_INIT2 (INTL_CODESET_ISO88591, LANG_COLL_ISO_BINARY)
 };
 
+TP_DOMAIN tp_Json_domain = { NULL, NULL, &tp_Json, DB_MAX_VARNCHAR_PRECISION, 0,
+  DOMAIN_INIT2 (INTL_CODESET_ISO88591, LANG_COLL_ISO_BINARY)
+};
+
 /* These must be in DB_TYPE order */
 static TP_DOMAIN *tp_Domains[] = {
   &tp_Null_domain,
@@ -376,6 +380,7 @@ static TP_DOMAIN *tp_Domains[] = {
   &tp_Timestampltz_domain,
   &tp_Datetimetz_domain,
   &tp_Datetimeltz_domain,
+  &tp_Json_domain,
   &tp_Timetz_domain,
   &tp_Timeltz_domain,
   &tp_Null_domain,
@@ -10274,8 +10279,12 @@ tp_value_cast_internal (const DB_VALUE * src, DB_VALUE * dest, const TP_DOMAIN *
 	  }
 	pr_clear_value (&conv_val);
       }
-      break;
-
+    case DB_TYPE_JSON:
+      {
+	pr_clone_value ((DB_VALUE *) src, dest);
+	status = DOMAIN_COMPATIBLE;
+	break;
+      }
     default:
       status = DOMAIN_INCOMPATIBLE;
       break;

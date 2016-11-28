@@ -103,7 +103,7 @@ typedef struct pr_type
  * PRIMITIVE TYPE STRUCTURES
  */
 /* The number of following types */
-#define PR_TYPE_TOTAL 32
+#define PR_TYPE_TOTAL 41
 
 extern PR_TYPE tp_Null;
 extern PR_TYPE tp_Integer;
@@ -143,6 +143,7 @@ extern PR_TYPE tp_Timestamptz;
 extern PR_TYPE tp_Timestampltz;
 extern PR_TYPE tp_Datetimetz;
 extern PR_TYPE tp_Datetimeltz;
+extern PR_TYPE tp_Json;
 extern PR_TYPE tp_Timetz;
 extern PR_TYPE tp_Timeltz;
 
@@ -179,6 +180,7 @@ extern PR_TYPE *tp_Type_resultset;
 extern PR_TYPE *tp_Type_midxkey;
 extern PR_TYPE *tp_Type_bigint;
 extern PR_TYPE *tp_Type_datetime;
+extern PR_TYPE *tp_Type_json;
 
 extern PR_TYPE *tp_Type_id_map[];
 

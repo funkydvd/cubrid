@@ -10281,8 +10281,9 @@ tp_value_cast_internal (const DB_VALUE * src, DB_VALUE * dest, const TP_DOMAIN *
       }
     case DB_TYPE_JSON:
       {
-	pr_clone_value ((DB_VALUE *) src, dest);
-	status = DOMAIN_COMPATIBLE;
+	/*pr_clone_value ((DB_VALUE *) src, dest);
+	   status = DOMAIN_COMPATIBLE; */
+	err = db_make_json (target, NULL);
 	break;
       }
     default:

@@ -1080,6 +1080,7 @@ extern int db_make_datetime (DB_VALUE * value, const DB_DATETIME * datetime);
 extern int db_make_datetimeltz (DB_VALUE * value, const DB_DATETIME * datetime);
 extern int db_make_datetimetz (DB_VALUE * value, const DB_DATETIMETZ * datetimetz);
 extern int db_make_monetary (DB_VALUE * value, const DB_CURRENCY type, const double amount);
+extern int db_make_json (DB_VALUE * value, char *string);
 extern int db_make_pointer (DB_VALUE * value, DB_C_POINTER ptr);
 extern int db_make_error (DB_VALUE * value, const int errcode);
 extern int db_make_method_error (DB_VALUE * value, const int errcode, const char *errmsg);

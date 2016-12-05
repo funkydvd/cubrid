@@ -892,6 +892,12 @@ static int pr_write_compressed_string_to_buffer (OR_BUF * buf, char *compressed_
 						 int decompressed_length, int alignment);
 static int pr_write_uncompressed_string_to_buffer (OR_BUF * buf, char *string, int size, int align);
 
+static int mr_setval_json (DB_VALUE * dest, const DB_VALUE * src, bool copy);
+static void mr_initval_json (DB_VALUE * value, int precision, int scale);
+static void mr_setmem_json (void *mem, TP_DOMAIN * domain, DB_VALUE * value);
+static int mr_getmem_json (void *mem, TP_DOMAIN * domain, DB_VALUE * value, bool copy);
+static void mr_initmem_json (void *mem, TP_DOMAIN * domain);
+
 /*
  * Value_area
  *    Area used for allocation of value containers that may be given out
@@ -1322,11 +1328,11 @@ PR_TYPE tp_Json = {
   1,
   help_fprint_value,
   help_sprint_value,
-  mr_initmem_varnchar,
-  mr_initval_varnchar,
-  mr_setmem_varnchar,
-  mr_getmem_varnchar,
-  mr_setval_varnchar,
+  mr_initmem_json,
+  mr_initval_json,
+  mr_setmem_json,
+  mr_getmem_json,
+  mr_setval_json,
   mr_data_lengthmem_varnchar,
   mr_data_lengthval_varnchar,
   mr_data_writemem_varnchar,
@@ -2904,6 +2910,24 @@ mr_getmem_bigint (void *mem, TP_DOMAIN * domain, DB_VALUE * value, bool copy)
 {
   return db_make_bigint (value, *(DB_BIGINT *) mem);
 }
+
+static int
+mr_setmem_json (void *mem, TP_DOMAIN * domain, DB_VALUE * value)
+{
+  if (value != NULL)
+    *(char **) mem = db_get_json (value);
+  else
+    mr_initmem_json (mem, domain);
+
+  return NO_ERROR;
+}
+
+static int
+mr_getmem_json (void *mem, TP_DOMAIN * domain, DB_VALUE * value, bool copy)
+{
+  return db_make_json (value, *(char **) mem);
+}
+
 
 static void
 mr_data_writemem_bigint (OR_BUF * buf, void *mem, TP_DOMAIN * domain)
@@ -4560,6 +4584,23 @@ mr_setval_datetimeltz (DB_VALUE * dest, const DB_VALUE * src, bool copy)
     }
   return error;
 }
+
+static int
+mr_setval_json (DB_VALUE * dest, const DB_VALUE * src, bool copy)
+{
+  int error;
+
+  if (DB_IS_NULL (src))
+    {
+      error = db_value_domain_init (dest, DB_TYPE_JSON, DB_DEFAULT_PRECISION, DB_DEFAULT_SCALE);
+    }
+  else
+    {
+      error = db_make_json (dest, db_get_json (src));
+    }
+  return error;
+}
+
 
 static void
 mr_data_writemem_datetime (OR_BUF * buf, void *mem, TP_DOMAIN * domain)
@@ -13682,7 +13723,11 @@ mr_initmem_varnchar (void *mem, TP_DOMAIN * domain)
 {
   *(char **) mem = NULL;
 }
-
+static void
+mr_initmem_json (void *mem, TP_DOMAIN * domain)
+{
+  *(char **) mem = NULL;
+}
 
 /*
  * The main difference between "memory" strings and "value" strings is that
@@ -13905,6 +13950,13 @@ static void
 mr_initval_varnchar (DB_VALUE * value, int precision, int scale)
 {
   db_make_varnchar (value, precision, NULL, 0, LANG_SYS_CODESET, LANG_SYS_COLLATION);
+  value->need_clear = false;
+}
+
+static void
+mr_initval_json (DB_VALUE * value, int precision, int scale)
+{
+  db_make_json (value, NULL);
   value->need_clear = false;
 }
 

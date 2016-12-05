@@ -301,6 +301,9 @@
 	       || DB_VALUE_DOMAIN_TYPE (v) == DB_TYPE_DATETIMELTZ), \
        (DB_DATETIME *) (&(v)->data.datetime))
 
+#define DB_GET_JSON(v) \
+    (assert (DB_VALUE_DOMAIN_TYPE (v) == DB_TYPE_JSON), \
+       ((v)->data.ch.medium.buf))
 #define DB_GET_DATETIMETZ(v) \
     (assert (DB_VALUE_DOMAIN_TYPE (v) == DB_TYPE_DATETIMETZ),  \
      (DB_DATETIMETZ *) (&(v)->data.datetimetz))
@@ -423,6 +426,7 @@
 #define db_get_timestamp(v) DB_GET_TIMESTAMP(v)
 #define db_get_timestamptz(v) DB_GET_TIMESTAMPTZ(v)
 #define db_get_datetime(v) DB_GET_DATETIME(v)
+#define db_get_json(v) DB_GET_JSON(v)
 #define db_get_datetimetz(v) DB_GET_DATETIMETZ(v)
 #define db_get_monetary(v) DB_GET_MONETARY(v)
 #define db_get_pointer(v) DB_GET_POINTER(v)

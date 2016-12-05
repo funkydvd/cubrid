@@ -259,6 +259,7 @@ db_value_domain_init (DB_VALUE * value, const DB_TYPE type, const int precision,
       break;
 
     case DB_TYPE_VARCHAR:
+    case DB_TYPE_JSON:
       if (precision == DB_DEFAULT_PRECISION)
 	{
 	  value->domain.char_info.length = DB_MAX_VARCHAR_PRECISION;
@@ -2355,6 +2356,18 @@ db_make_monetary (DB_VALUE * value, const DB_CURRENCY type, const double amount)
   value->domain.general_info.is_null = 0;
   value->need_clear = false;
 
+  return error;
+}
+
+int
+db_make_json (DB_VALUE * value, char *string)
+{
+  int error = NO_ERROR;
+
+  value->domain.general_info.type = DB_TYPE_JSON;
+  value->domain.general_info.is_null = 0;
+  value->need_clear = false;
+  value->data.ch.medium.buf = string;
   return error;
 }
 

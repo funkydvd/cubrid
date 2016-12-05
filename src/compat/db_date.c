@@ -4381,6 +4381,19 @@ decode_mtime (int mtimeval, int *hourp, int *minutep, int *secondp, int *millise
     }
 }
 
+
+int
+db_json_to_string (char *buf, char *json)
+{
+
+  if (json != NULL)
+    {
+      strcpy (buf, json);
+      return strlen (json);
+    }
+  return 0;
+}
+
 /*
  * db_datetime_to_string() - Print a DB_DATETIME into a char buffer using
  *    strftime().

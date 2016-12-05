@@ -894,9 +894,16 @@ static int pr_write_uncompressed_string_to_buffer (OR_BUF * buf, char *string, i
 
 static int mr_setval_json (DB_VALUE * dest, const DB_VALUE * src, bool copy);
 static void mr_initval_json (DB_VALUE * value, int precision, int scale);
-static void mr_setmem_json (void *mem, TP_DOMAIN * domain, DB_VALUE * value);
+static int mr_setmem_json (void *mem, TP_DOMAIN * domain, DB_VALUE * value);
 static int mr_getmem_json (void *mem, TP_DOMAIN * domain, DB_VALUE * value, bool copy);
 static void mr_initmem_json (void *mem, TP_DOMAIN * domain);
+static int mr_data_lengthval_json (DB_VALUE * value, int disk);
+static int mr_data_lengthmem_json (void *memptr, TP_DOMAIN * domain, int disk);
+static int mr_data_writeval_json (OR_BUF * buf, DB_VALUE * value);
+static int mr_data_readval_json (OR_BUF * buf, DB_VALUE * value, TP_DOMAIN * domain, int size, bool copy,
+				 char *copy_buf, int copy_buf_len);
+static void mr_data_writemem_json (OR_BUF * buf, void *memptr, TP_DOMAIN * domain);
+static void mr_data_readmem_json (OR_BUF * buf, void *memptr, TP_DOMAIN * domain, int size);
 
 /*
  * Value_area
@@ -1333,12 +1340,12 @@ PR_TYPE tp_Json = {
   mr_setmem_json,
   mr_getmem_json,
   mr_setval_json,
-  mr_data_lengthmem_varnchar,
-  mr_data_lengthval_varnchar,
-  mr_data_writemem_varnchar,
-  mr_data_readmem_varnchar,
-  mr_data_writeval_varnchar,
-  mr_data_readval_varnchar,
+  mr_data_lengthmem_json,
+  mr_data_lengthval_json,
+  mr_data_writemem_json,
+  mr_data_readmem_json,
+  mr_data_writeval_json,
+  mr_data_readval_json,
   mr_index_lengthmem_varnchar,
   mr_index_lengthval_varnchar,
   mr_index_writeval_varnchar,
@@ -13893,7 +13900,11 @@ mr_data_lengthmem_varnchar (void *memptr, TP_DOMAIN * domain, int disk)
 
   return len;
 }
-
+static int
+mr_data_lengthmem_json (void *memptr, TP_DOMAIN * domain, int disk)
+{
+  return 0;
+}
 static int
 mr_index_lengthmem_varnchar (void *memptr, TP_DOMAIN * domain)
 {
@@ -13915,7 +13926,10 @@ mr_data_writemem_varnchar (OR_BUF * buf, void *memptr, TP_DOMAIN * domain)
       or_packed_put_varchar (buf, cur, len);
     }
 }
-
+static void
+mr_data_writemem_json (OR_BUF * buf, void *memptr, TP_DOMAIN * domain)
+{
+}
 
 /*
  * The amount of memory requested is currently calculated based on the
@@ -13929,6 +13943,11 @@ static void
 mr_data_readmem_varnchar (OR_BUF * buf, void *memptr, TP_DOMAIN * domain, int size)
 {
   return mr_data_readmem_string (buf, memptr, domain, size);
+}
+
+static void
+mr_data_readmem_json (OR_BUF * buf, void *memptr, TP_DOMAIN * domain, int size)
+{
 }
 
 static void
@@ -14052,10 +14071,22 @@ mr_data_readval_varnchar (OR_BUF * buf, DB_VALUE * value, TP_DOMAIN * domain, in
   return mr_readval_varnchar_internal (buf, value, domain, size, copy, copy_buf, copy_buf_len, INT_ALIGNMENT);
 }
 
+static int
+mr_data_readval_json (OR_BUF * buf, DB_VALUE * value, TP_DOMAIN * domain, int size, bool copy, char *copy_buf,
+		      int copy_buf_len)
+{
+  return 0;
+}
+
 /*
  * Ignoring precision as byte size is really the only important thing for
  * varnchar.
  */
+static int
+mr_data_lengthval_json (DB_VALUE * value, int disk)
+{
+  return 0;
+}
 static int
 mr_lengthval_varnchar_internal (DB_VALUE * value, int disk, int align)
 {
@@ -14147,6 +14178,11 @@ mr_lengthval_varnchar_internal (DB_VALUE * value, int disk, int align)
   return len;
 }
 
+static int
+mr_data_writeval_json (OR_BUF * buf, DB_VALUE * value)
+{
+  return 0;
+}
 static int
 mr_writeval_varnchar_internal (OR_BUF * buf, DB_VALUE * value, int align)
 {

@@ -63,6 +63,7 @@ extern int db_datetime_encode (DB_DATETIME * datetime, int month, int day, int y
 extern int db_datetime_decode (const DB_DATETIME * datetime, int *month, int *day, int *year, int *hour, int *minute,
 			       int *second, int *millisecond);
 extern int db_datetime_to_string (char *buf, int bufsize, DB_DATETIME * datetime);
+extern int db_json_to_string (char *buf, char *json);
 extern int db_datetimetz_to_string (char *buf, int bufsize, DB_DATETIME * dt, const TZ_ID * tz_id);
 extern int db_datetimeltz_to_string (char *buf, int bufsize, DB_DATETIME * dt);
 extern int db_datetime_to_string2 (char *buf, int bufsize, DB_DATETIME * datetime);

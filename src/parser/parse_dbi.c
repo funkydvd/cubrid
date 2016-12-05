@@ -862,6 +862,10 @@ pt_dbval_to_value (PARSER_CONTEXT * parser, const DB_VALUE * val)
       result->info.value.data_value.i = DB_GET_SHORT (val);
       break;
 
+    case DB_TYPE_JSON:
+      db_json_to_string (buf, DB_GET_JSON (val));
+      result->info.value.data_value.str = pt_append_bytes (parser, NULL, buf, strlen (buf));
+      break;
     case DB_TYPE_VOBJ:
       if (vid_vobj_to_object (val, &mop) != NO_ERROR)
 	{

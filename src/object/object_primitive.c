@@ -13929,6 +13929,7 @@ mr_data_writemem_varnchar (OR_BUF * buf, void *memptr, TP_DOMAIN * domain)
 static void
 mr_data_writemem_json (OR_BUF * buf, void *memptr, TP_DOMAIN * domain)
 {
+
 }
 
 /*
@@ -14075,7 +14076,23 @@ static int
 mr_data_readval_json (OR_BUF * buf, DB_VALUE * value, TP_DOMAIN * domain, int size, bool copy, char *copy_buf,
 		      int copy_buf_len)
 {
-  return 0;
+  int rc = NO_ERROR;
+  char *temp_int;
+
+  if (value == NULL)
+    {
+      return rc;
+    }
+  else
+    {
+      temp_int = or_get_json (buf, &rc);
+      if (rc == NO_ERROR)
+	{
+	  db_make_json (value, temp_int);
+	}
+      value->need_clear = false;
+    }
+  return rc;
 }
 
 /*
@@ -14181,7 +14198,7 @@ mr_lengthval_varnchar_internal (DB_VALUE * value, int disk, int align)
 static int
 mr_data_writeval_json (OR_BUF * buf, DB_VALUE * value)
 {
-  return 0;
+  return or_put_json (buf, value->data.ch.medium.buf);
 }
 static int
 mr_writeval_varnchar_internal (OR_BUF * buf, DB_VALUE * value, int align)

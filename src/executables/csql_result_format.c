@@ -1318,6 +1318,13 @@ csql_db_value_as_string (DB_VALUE * value, int *length, bool plain_string)
 	  len = strlen (result);
 	}
       break;
+    case DB_TYPE_JSON:
+      result = value->data.ch.medium.buf;
+      if (result)
+	{
+	  len = strlen (result);
+	}
+      break;
     case DB_TYPE_SHORT:
       result =
 	bigint_to_string (SHORT_TO_INT (DB_GET_SHORT (value)), default_short_profile.fieldwidth,

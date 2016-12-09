@@ -625,13 +625,14 @@ get_current_result (int **lengths, const CUR_RESULT_INFO * result_info, bool pla
 	      char *temp;
 
 	      temp = csql_db_value_as_string (&db_value, &len[i], plain_output);
+	      val[i] = (char *) malloc (strlen (temp) + 1);
 	      if (temp == NULL)
 		{
 		  csql_Error_code = CSQL_ERR_NO_MORE_MEMORY;
 		  goto error;
 		}
 	      temp[len[i]] = '\0';
-	      val[i] = temp;
+	      strcpy (val[i], temp);
 	    }
 	}
 

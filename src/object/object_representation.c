@@ -2116,6 +2116,7 @@ or_put_bigint (OR_BUF * buf, DB_BIGINT num)
 int
 or_put_json (OR_BUF * buf, char *json)
 {
+  or_put_int (buf, strlen (json));
   memcpy (buf->ptr, json, strlen (json));
   buf->ptr += strlen (json);
   return NO_ERROR;
@@ -2150,9 +2151,10 @@ or_get_bigint (OR_BUF * buf, int *error)
 char *
 or_get_json (OR_BUF * buf, int *error)
 {
-  char *val = (char *) db_private_alloc (NULL, 5);
-  memcpy (val, buf->ptr, 4);
-  buf->ptr += 4;
+  int x = or_get_int (buf, error);
+  char *val = (char *) db_private_alloc (NULL, x + 1);
+  memcpy (val, buf->ptr, x);
+  buf->ptr += x;
   *error = NO_ERROR;
   return val;
 }

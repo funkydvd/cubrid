@@ -13903,7 +13903,19 @@ mr_data_lengthmem_varnchar (void *memptr, TP_DOMAIN * domain, int disk)
 static int
 mr_data_lengthmem_json (void *memptr, TP_DOMAIN * domain, int disk)
 {
-  return 0;
+  char **mem, *cur;
+  int len = 0;
+  if (memptr != NULL)
+    {
+      mem = (char **) memptr;
+      cur = *mem;
+      if (cur != NULL)
+	{
+	  len = *(int *) cur;
+	}
+    }
+
+  return len;
 }
 static int
 mr_index_lengthmem_varnchar (void *memptr, TP_DOMAIN * domain)

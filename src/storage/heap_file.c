@@ -7022,30 +7022,12 @@ static int
 heap_scancache_end_internal (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * scan_cache, bool scan_state)
 {
   int ret = NO_ERROR;
-  HEAP_SCANCACHE_NODE_LIST *p = NULL;
 
   if (scan_cache->debug_initpattern != HEAP_DEBUG_SCANCACHE_INITPATTERN)
     {
       er_log_debug (ARG_FILE_LINE, "heap_scancache_end_internal: Your scancache is not initialized");
       return ER_FAILED;
     }
-
-  if (!OID_ISNULL (&scan_cache->node.class_oid))
-    {
-      lock_unlock_scan (thread_p, &scan_cache->node.class_oid, scan_state);
-    }
-
-  p = scan_cache->partition_list;
-  while (p != NULL)
-    {
-      if (!OID_EQ (&p->node.class_oid, &scan_cache->node.class_oid))
-	{
-	  lock_unlock_scan (thread_p, &p->node.class_oid, scan_state);
-	}
-      p = p->next;
-    }
-
-  OID_SET_NULL (&scan_cache->node.class_oid);
 
   ret = heap_scancache_quick_end (thread_p, scan_cache);
 
@@ -17312,7 +17294,7 @@ heap_eval_function_index (THREAD_ENTRY * thread_p, FUNCTION_INDEX_INFO * func_in
       /* insert case, read the values */
       if (func_pred == NULL)
 	{
-	  if (stx_map_stream_to_func_pred (NULL, (FUNC_PRED **) (&func_pred), expr_stream, expr_stream_size,
+	  if (stx_map_stream_to_func_pred (thread_p, (FUNC_PRED **) (&func_pred), expr_stream, expr_stream_size,
 					   &unpack_info))
 	    {
 	      error = ER_FAILED;
@@ -17447,8 +17429,8 @@ heap_init_func_pred_unpack_info (THREAD_ENTRY * thread_p, HEAP_CACHE_ATTRINFO * 
 		}
 	    }
 
-	  if (stx_map_stream_to_func_pred (thread_p, (FUNC_PRED **) (&(fi_preds[i].func_pred)), fi_info->expr_stream,
-					   fi_info->expr_stream_size, &(fi_preds[i].unpack_info)))
+	  if (stx_map_stream_to_func_pred (thread_p, (FUNC_PRED **) (&(fi_preds[i].func_pred)),
+					   fi_info->expr_stream, fi_info->expr_stream_size, &(fi_preds[i].unpack_info)))
 	    {
 	      error_status = ER_FAILED;
 	      goto error;
@@ -18789,13 +18771,10 @@ heap_get_bigone_content (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * scan_cache, i
       if (scan_cache->area == NULL)
 	{
 	  /* 
-	   * Allocate an area to hold the object. Assume that the object
-	   * will fit in two pages for not better estimates. We could call
-	   * heap_ovf_get_length, but it may be better to just guess and
-	   * realloc if needed.
-	   * We could also check the estimates for average object length,
-	   * but again, it may be expensive and may not be accurate
-	   * for this object.
+	   * Allocate an area to hold the object. Assume that the object will fit in two pages for not better estimates.
+	   * We could call heap_ovf_get_length, but it may be better to just guess and realloc if needed.
+	   * We could also check the estimates for average object length, but again, it may be expensive and may not be
+	   * accurate for this object.
 	   */
 	  scan_cache->area_size = DB_PAGESIZE * 2;
 	  scan_cache->area = (char *) db_private_alloc (thread_p, scan_cache->area_size);
@@ -24239,6 +24218,15 @@ heap_get_visible_version_internal (THREAD_ENTRY * thread_p, HEAP_GET_CONTEXT * c
       context->class_oid_p = &class_oid_local;
     }
 
+  if (context->scan_cache && context->ispeeking == COPY && context->recdes_p != NULL)
+    {
+      /* Allocate an area to hold the object. Assume that the object will fit in two pages for not better estimates. */
+      if (heap_scan_cache_allocate_area (thread_p, context->scan_cache, DB_PAGESIZE * 2) != NO_ERROR)
+	{
+	  return S_ERROR;
+	}
+    }
+
   scan = heap_prepare_get_context (thread_p, context, context->latch_mode, is_heap_scan, LOG_WARNING_IF_DELETED);
   if (scan != S_SUCCESS)
     {
@@ -24435,6 +24423,15 @@ heap_get_last_version (THREAD_ENTRY * thread_p, HEAP_GET_CONTEXT * context)
   assert (context->scan_cache != NULL);
   assert (context->recdes_p != NULL);
 
+  if (context->scan_cache && context->ispeeking == COPY)
+    {
+      /* Allocate an area to hold the object. Assume that the object will fit in two pages for not better estimates. */
+      if (heap_scan_cache_allocate_area (thread_p, context->scan_cache, DB_PAGESIZE * 2) != NO_ERROR)
+	{
+	  return S_ERROR;
+	}
+    }
+
   scan = heap_prepare_get_context (thread_p, context, context->latch_mode, false, LOG_WARNING_IF_DELETED);
   if (scan != S_SUCCESS)
     {
@@ -24599,11 +24596,49 @@ heap_init_get_context (THREAD_ENTRY * thread_p, HEAP_GET_CONTEXT * context, cons
     }
 }
 
+/*
+ * heap_scan_cache_allocate_area () - Allocate scan_cache area
+ *
+ * return: error code
+ * thread_p (in) : Thread entry.
+ * scan_cache_p (in) : Scan cache.
+ * size (in) : Required size of recdes data.
+ */
+int
+heap_scan_cache_allocate_area (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * scan_cache_p, int size)
+{
+  assert (scan_cache_p != NULL && size > 0);
+  if (scan_cache_p->area == NULL)
+    {
+      /* Allocate an area to hold the object. Assume that the object will fit in two pages for not better estimates. */
+      scan_cache_p->area = (char *) db_private_alloc (thread_p, size);
+      if (scan_cache_p->area == NULL)
+	{
+	  scan_cache_p->area_size = -1;
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, size);
+	  return ER_OUT_OF_VIRTUAL_MEMORY;
+	}
+      scan_cache_p->area_size = size;
+    }
+  else if (scan_cache_p->area_size < size)
+    {
+      scan_cache_p->area = (char *) db_private_realloc (thread_p, scan_cache_p->area, size);
+      if (scan_cache_p->area == NULL)
+	{
+	  scan_cache_p->area_size = -1;
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, size);
+	  return ER_OUT_OF_VIRTUAL_MEMORY;
+	}
+      scan_cache_p->area_size = size;
+    }
+
+  return NO_ERROR;
+}
 
 /*
  * heap_scan_cache_allocate_recdes_data () - Allocate recdes data and set it to recdes
  * 
- * return NO_ERROR or ER_FAILED
+ * return: error code 
  * thread_p (in) : Thread entry.
  * scan_cache_p (in) : Scan cache.
  * recdes_p (in) : Record descriptor.
@@ -24613,21 +24648,15 @@ static int
 heap_scan_cache_allocate_recdes_data (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * scan_cache_p, RECDES * recdes_p,
 				      int size)
 {
+  int error_code;
   assert (scan_cache_p != NULL && recdes_p != NULL);
 
-  if (scan_cache_p->area == NULL)
+  error_code = heap_scan_cache_allocate_area (thread_p, scan_cache_p, size);
+  if (error_code != NO_ERROR)
     {
-      /* Allocate an area to hold the object. Assume that the object will fit in two pages for not better
-       * estimates. */
-      scan_cache_p->area_size = size;
-      scan_cache_p->area = (char *) db_private_alloc (thread_p, scan_cache_p->area_size);
-      if (scan_cache_p->area == NULL)
-	{
-	  scan_cache_p->area_size = -1;
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, size);
-	  return ER_FAILED;
-	}
+      return error_code;
     }
+
   recdes_p->data = scan_cache_p->area;
   recdes_p->area_size = scan_cache_p->area_size;
 
@@ -24656,7 +24685,6 @@ heap_get_class_record (THREAD_ENTRY * thread_p, const OID * class_oid, RECDES * 
   /* for debugging set root_oid NULL and check afterwards if it really is root oid */
   OID_SET_NULL (&root_oid);
 #endif /* !NDEBUG */
-
   heap_init_get_context (thread_p, &context, class_oid, &root_oid, recdes_p, scan_cache, ispeeking, NULL_CHN);
 
   scan = heap_get_last_version (thread_p, &context);

@@ -10284,6 +10284,9 @@ tp_value_cast_internal (const DB_VALUE * src, DB_VALUE * dest, const TP_DOMAIN *
 	/*pr_clone_value ((DB_VALUE *) src, dest);
 	   status = DOMAIN_COMPATIBLE; */
 	/*IMPORTANT CODE HERE */
+	int nr = strlen (src->data.ch.medium.buf);
+	char *rez = (char *) db_private_alloc (NULL, nr + 3);
+	OR_PUT_INT (rez, nr);
 	err = db_make_json (target, src->data.ch.medium.buf);
 	break;
       }

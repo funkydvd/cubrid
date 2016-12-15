@@ -13911,7 +13911,7 @@ mr_data_lengthmem_json (void *memptr, TP_DOMAIN * domain, int disk)
       cur = *mem;
       if (cur != NULL)
 	{
-	  len = *(int *) cur;
+	  len = *(int *) cur + 1;
 	}
     }
 
@@ -14089,7 +14089,8 @@ mr_data_readval_json (OR_BUF * buf, DB_VALUE * value, TP_DOMAIN * domain, int si
 		      int copy_buf_len)
 {
   int rc = NO_ERROR;
-  char *temp_int;
+  char *temp_int, *t2;
+  int ln, error;
 
   if (value == NULL)
     {
@@ -14097,9 +14098,12 @@ mr_data_readval_json (OR_BUF * buf, DB_VALUE * value, TP_DOMAIN * domain, int si
     }
   else
     {
+      int nr;
+
       temp_int = or_get_json (buf, &rc);
       if (rc == NO_ERROR)
 	{
+
 	  db_make_json (value, temp_int);
 	}
       value->need_clear = false;
@@ -14114,7 +14118,9 @@ mr_data_readval_json (OR_BUF * buf, DB_VALUE * value, TP_DOMAIN * domain, int si
 static int
 mr_data_lengthval_json (DB_VALUE * value, int disk)
 {
-  return 0;
+  int len;
+  len = OR_GET_INT (value->data.ch.medium.buf);
+  return len + 1;
 }
 static int
 mr_lengthval_varnchar_internal (DB_VALUE * value, int disk, int align)

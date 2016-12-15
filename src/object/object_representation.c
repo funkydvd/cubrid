@@ -2153,14 +2153,10 @@ or_get_json (OR_BUF * buf, int *error)
 {
   int x = or_get_int (buf, error);
   char *val = (char *) db_private_alloc (NULL, x + 3);
-  char *aux = (char *) db_private_alloc (NULL, x + 1);
+  char *aux = (char *) db_private_alloc (NULL, x + 3);
   memset (aux, 0, sizeof (aux));
   memcpy (aux, buf->ptr, x);
-  memset (val, 0, sizeof (val));
-  sprintf (val, "%d\0", x);
-  strcat (val, aux);
-  buf->ptr += x;
-  *error = NO_ERROR;
+  aux[x] = '\0';
   return aux;
 }
 

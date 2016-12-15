@@ -14119,8 +14119,8 @@ static int
 mr_data_lengthval_json (DB_VALUE * value, int disk)
 {
   int len;
-  len = OR_GET_INT (value->data.ch.medium.buf);
-  return len + 1;
+  len = value->data.ch.medium.size;
+  return len + OR_INT_SIZE;
 }
 static int
 mr_lengthval_varnchar_internal (DB_VALUE * value, int disk, int align)

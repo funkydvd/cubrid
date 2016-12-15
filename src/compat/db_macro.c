@@ -2367,6 +2367,7 @@ db_make_json (DB_VALUE * value, char *string)
   value->domain.general_info.type = DB_TYPE_JSON;
   value->domain.general_info.is_null = 0;
   value->need_clear = false;
+  value->data.ch.medium.size = strlen (string);
   value->data.ch.medium.buf = string;
   return error;
 }

@@ -109,7 +109,7 @@ static void log_recovery_notpartof_volumes (THREAD_ENTRY * thread_p);
 static void log_recovery_resetlog (THREAD_ENTRY * thread_p, LOG_LSA * new_append_lsa, bool is_new_append_page,
 				   LOG_LSA * last_lsa);
 static int log_recovery_find_first_postpone (THREAD_ENTRY * thread_p, LOG_LSA * ret_lsa, LOG_LSA * start_postpone_lsa,
-					     LOG_LSA * start_postpone_run_lsa, LOG_TDES * tdes);
+					     LOG_TDES * tdes);
 
 static int log_rv_record_modify_internal (THREAD_ENTRY * thread_p, LOG_RCV * rcv, bool is_undo);
 static int log_rv_undoredo_partial_changes_recursive (THREAD_ENTRY * thread_p, OR_BUF * rcv_buf, RECDES * record,
@@ -273,6 +273,13 @@ log_rv_undo_record (THREAD_ENTRY * thread_p, LOG_LSA * log_lsa, LOG_PAGE * log_p
       else if (rcvindex == RVBT_MVCC_NOTIFY_VACUUM || rcvindex == RVES_NOTIFY_VACUUM)
 	{
 	  /* nothing to do */
+	}
+      else if (rcvindex == RVBT_LOG_GLOBAL_UNIQUE_STATS_COMMIT)
+	{
+	  /* this only modifies in memory data that is only flushed to disk on checkpoints. we need to execute undo
+	   * every time recovery is run, and we cannot compensate it. */
+	  error_code = (*RV_fun[rcvindex].undofun) (thread_p, rcv);
+	  assert (error_code == NO_ERROR);
 	}
       else if (RCV_IS_LOGICAL_COMPENSATE_MANUAL (rcvindex))
 	{
@@ -1179,6 +1186,7 @@ log_rv_analysis_commit_with_postpone (THREAD_ENTRY * thread_p, int tran_id, LOG_
   /* Nothing to undo */
   LSA_SET_NULL (&tdes->undo_nxlsa);
   LSA_COPY (&tdes->tail_lsa, log_lsa);
+  tdes->rcv.tran_start_postpone_lsa = tdes->tail_lsa;
 
   /* 
    * Need to read the start postpone record to set the postpone address
@@ -1255,10 +1263,25 @@ log_rv_analysis_sysop_start_postpone (THREAD_ENTRY * thread_p, int tran_id, LOG_
       /* no undo */
       LSA_SET_NULL (&tdes->undo_nxlsa);
     }
+  else if (sysop_start_posp->sysop_end.type == LOG_SYSOP_END_LOGICAL_RUN_POSTPONE)
+    {
+      if (sysop_start_posp->sysop_end.run_postpone.is_sysop_postpone)
+	{
+	  /* system op postpone inside system op postpone. not a valid situation */
+	  assert (false);
+	}
+      else
+	{
+	  /* no undo. it is possible that the transaction state is TRAN_UNACTIVE_UNILATERALLY_ABORTED because this might
+	   * be the first log record discovered for current transaction. it will be set correctly when the system op end
+	   * is found or executed.
+	   */
+	  LSA_SET_NULL (&tdes->undo_nxlsa);
+	}
+    }
   else
     {
-      assert (sysop_start_posp->sysop_end.type == LOG_SYSOP_END_COMMIT
-	      || sysop_start_posp->sysop_end.type == LOG_SYSOP_END_LOGICAL_COMPENSATE);
+      assert (sysop_start_posp->sysop_end.type != LOG_SYSOP_END_ABORT);
     }
 
   /* update state */
@@ -1437,6 +1460,7 @@ log_rv_analysis_sysop_end (THREAD_ENTRY * thread_p, int tran_id, LOG_LSA * log_l
 
   LSA_COPY (&tdes->tail_lsa, log_lsa);
   LSA_COPY (&tdes->undo_nxlsa, &tdes->tail_lsa);
+  LSA_COPY (&tdes->tail_topresult_lsa, &tdes->tail_lsa);
 
   LOG_READ_ADD_ALIGN (thread_p, sizeof (LOG_RECORD_HEADER), log_lsa, log_page_p);
   LOG_READ_ADVANCE_WHEN_DOESNT_FIT (thread_p, sizeof (*sysop_end), log_lsa, log_page_p);
@@ -1475,9 +1499,6 @@ log_rv_analysis_sysop_end (THREAD_ENTRY * thread_p, int tran_id, LOG_LSA * log_l
       break;
 
     case LOG_SYSOP_END_LOGICAL_RUN_POSTPONE:
-      assert (tdes->state == TRAN_UNACTIVE_COMMITTED_WITH_POSTPONE
-	      || tdes->state == TRAN_UNACTIVE_TOPOPE_COMMITTED_WITH_POSTPONE);
-
       /* we have a complicated story here, because logical run postpone can be run in two situations: transaction
        * postpone or system op postpone.
        * logical run postpone in transaction postpone can have other postpones inside it (e.g. file destroy).
@@ -1495,7 +1516,6 @@ log_rv_analysis_sysop_end (THREAD_ENTRY * thread_p, int tran_id, LOG_LSA * log_l
 	  /* run postpone for log record inside a system op */
 	  if (tdes->topops.last < 0 || tdes->state != TRAN_UNACTIVE_TOPOPE_COMMITTED_WITH_POSTPONE)
 	    {
-	      assert_release (false);
 	      tdes->topops.last = 0;
 	      tdes->state = TRAN_UNACTIVE_TOPOPE_COMMITTED_WITH_POSTPONE;
 	    }
@@ -1505,6 +1525,16 @@ log_rv_analysis_sysop_end (THREAD_ENTRY * thread_p, int tran_id, LOG_LSA * log_l
 	{
 	  /* run postpone for log record inside transaction */
 	  tdes->posp_nxlsa = sysop_end->run_postpone.postpone_lsa;
+	  if (tdes->topops.last != -1)
+	    {
+	      assert (tdes->topops.last == 0);
+	      assert (tdes->state == TRAN_UNACTIVE_TOPOPE_COMMITTED_WITH_POSTPONE);
+	    }
+	  else
+	    {
+	      /* state must be TRAN_UNACTIVE_COMMITTED_WITH_POSTPONE. it may be TRAN_UNACTIVE_UNILATERALLY_ABORTED */
+	      tdes->state = TRAN_UNACTIVE_COMMITTED_WITH_POSTPONE;
+	    }
 
 	  /* no undo */
 	  LSA_SET_NULL (&tdes->undo_nxlsa);
@@ -1710,6 +1740,7 @@ log_rv_analysis_end_checkpoint (THREAD_ENTRY * thread_p, LOG_LSA * log_lsa, LOG_
       LSA_COPY (&tdes->posp_nxlsa, &chkpt_one->posp_nxlsa);
       LSA_COPY (&tdes->savept_lsa, &chkpt_one->savept_lsa);
       LSA_COPY (&tdes->tail_topresult_lsa, &chkpt_one->tail_topresult_lsa);
+      LSA_COPY (&tdes->rcv.tran_start_postpone_lsa, &chkpt_one->start_postpone_lsa);
       logtb_set_client_ids_all (&tdes->client, 0, NULL, chkpt_one->user_name, NULL, NULL, NULL, -1);
       if (LOG_ISTRAN_2PC (tdes))
 	{
@@ -3652,7 +3683,6 @@ static void
 log_recovery_finish_postpone (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
 {
   LOG_LSA first_postpone_to_apply;
-  LOG_LSA start_postpone_run_lsa;
 
   if (tdes == NULL || tdes->trid == NULL_TRANID)
     {
@@ -3663,7 +3693,7 @@ log_recovery_finish_postpone (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
   if (tdes->state == TRAN_UNACTIVE_TOPOPE_COMMITTED_WITH_POSTPONE)
     {
       /* We need to read the log record for system op start postpone */
-      LOG_LSA log_lsa;
+      LOG_LSA sysop_start_postpone_lsa = tdes->rcv.sysop_start_postpone_lsa;
       char log_page_buffer[IO_MAX_PAGE_SIZE + MAX_ALIGNMENT];
       LOG_PAGE *log_page = (LOG_PAGE *) PTR_ALIGN (log_page_buffer, MAX_ALIGNMENT);
       LOG_REC_SYSOP_START_POSTPONE sysop_start_postpone;
@@ -3671,15 +3701,30 @@ log_recovery_finish_postpone (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
       char *undo_buffer = NULL, *undo_data = NULL;
 
       assert (tdes->topops.last == 0);
+      assert (!LSA_ISNULL (&sysop_start_postpone_lsa));
       LSA_SET_NULL (&first_postpone_to_apply);
 
       /* first verify it didn't crash in the middle of a run postpone system op */
-      if (!LSA_ISNULL (&tdes->undo_nxlsa) && LSA_LT (&tdes->rcv.sysop_start_postpone_lsa, &tdes->undo_nxlsa))
+      if (!LSA_ISNULL (&tdes->undo_nxlsa) && LSA_LT (&sysop_start_postpone_lsa, &tdes->undo_nxlsa))
 	{
 	  /* rollback. simulate a new system op */
+
 	  log_sysop_start (thread_p);
-	  /* stop at sysop_start_postpone_lsa */
-	  tdes->topops.stack[tdes->topops.last].lastparent_lsa = tdes->rcv.sysop_start_postpone_lsa;
+
+	  /* now we don't really know where to stop the rollback, however we can estimate. the postpone phase should be
+	   * only populated with run postpone log records and logical run postpone system operations.
+	   * if last log record before this system op is a logical run postpone, its LSA is stored in
+	   * tdes->tail_topresult_lsa. if it is a run postpone, we won't know, but rollback skips them. so we can set
+	   * this system op parent to either tail_topresult_lsa or to sysop_start_postpone_lsa, whichever comes last.
+	   */
+	  if (!LSA_ISNULL (&tdes->tail_topresult_lsa) && LSA_GT (&tdes->tail_topresult_lsa, &sysop_start_postpone_lsa))
+	    {
+	      tdes->topops.stack[tdes->topops.last].lastparent_lsa = tdes->tail_topresult_lsa;
+	    }
+	  else
+	    {
+	      tdes->topops.stack[tdes->topops.last].lastparent_lsa = sysop_start_postpone_lsa;
+	    }
 	  /* rollback */
 	  log_sysop_abort (thread_p);
 	  assert (tdes->topops.last == 0);
@@ -3687,7 +3732,7 @@ log_recovery_finish_postpone (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
 
       /* find first postpone */
       log_recovery_find_first_postpone (thread_p, &first_postpone_to_apply,
-					&tdes->topops.stack[tdes->topops.last].posp_lsa, &start_postpone_run_lsa, tdes);
+					&tdes->topops.stack[tdes->topops.last].posp_lsa, tdes);
 
       if (!LSA_ISNULL (&first_postpone_to_apply))
 	{
@@ -3697,15 +3742,18 @@ log_recovery_finish_postpone (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
 
       /* simulate system op commit */
       /* we need the data from system op start postpone */
-      log_lsa = tdes->rcv.sysop_start_postpone_lsa;
       log_page->hdr.logical_pageid = NULL_PAGEID;
-      if (log_read_sysop_start_postpone (thread_p, &log_lsa, log_page, true, &sysop_start_postpone, &undo_buffer_size,
-					 &undo_buffer, &undo_data_size, &undo_data) != NO_ERROR)
+      if (log_read_sysop_start_postpone (thread_p, &sysop_start_postpone_lsa, log_page, true, &sysop_start_postpone,
+					 &undo_buffer_size, &undo_buffer, &undo_data_size, &undo_data) != NO_ERROR)
 	{
 	  /* give up */
 	  assert_release (false);
 	  return;
 	}
+      /* check this is not a system op postpone during system op postpone */
+      assert (sysop_start_postpone.sysop_end.type == LOG_SYSOP_END_LOGICAL_RUN_POSTPONE
+	      || !sysop_start_postpone.sysop_end.run_postpone.is_sysop_postpone);
+
       log_sysop_end_recovery_postpone (thread_p, &sysop_start_postpone.sysop_end, undo_data_size, undo_data);
       if (undo_buffer != NULL)
 	{
@@ -3715,15 +3763,26 @@ log_recovery_finish_postpone (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
 
       if (sysop_start_postpone.sysop_end.type == LOG_SYSOP_END_LOGICAL_RUN_POSTPONE)
 	{
-	  tdes->state = TRAN_UNACTIVE_COMMITTED_WITH_POSTPONE;
-	  LSA_SET_NULL (&tdes->undo_nxlsa);
+	  if (sysop_start_postpone.sysop_end.run_postpone.is_sysop_postpone)
+	    {
+	      /* this is a system op postpone during system op postpone? should not happen! */
+	      assert (false);
+	      tdes->state = TRAN_UNACTIVE_UNILATERALLY_ABORTED;
+	      tdes->undo_nxlsa = tdes->tail_lsa;
+	    }
+	  else
+	    {
+	      /* logical run postpone during transaction postpone. */
+	      tdes->state = TRAN_UNACTIVE_COMMITTED_WITH_POSTPONE;
+	      LSA_SET_NULL (&tdes->undo_nxlsa);
+
+	      /* we just finished the run postpone. update tdes->posp_nxlsa */
+	      tdes->posp_nxlsa = sysop_start_postpone.sysop_end.run_postpone.postpone_lsa;
+	    }
 	}
       else
 	{
-	  assert (sysop_start_postpone.sysop_end.type == LOG_SYSOP_END_COMMIT
-		  || sysop_start_postpone.sysop_end.type == LOG_SYSOP_END_LOGICAL_COMPENSATE
-		  || sysop_start_postpone.sysop_end.type == LOG_SYSOP_END_LOGICAL_UNDO
-		  || sysop_start_postpone.sysop_end.type == LOG_SYSOP_END_LOGICAL_MVCC_UNDO);
+	  assert (sysop_start_postpone.sysop_end.type != LOG_SYSOP_END_ABORT);
 	  tdes->state = TRAN_UNACTIVE_UNILATERALLY_ABORTED;
 	  tdes->undo_nxlsa = tdes->tail_lsa;
 	}
@@ -3743,23 +3802,35 @@ log_recovery_finish_postpone (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
       LSA_SET_NULL (&first_postpone_to_apply);
 
       assert (!VACUUM_IS_THREAD_VACUUM (thread_p));
+      assert (!LSA_ISNULL (&tdes->rcv.tran_start_postpone_lsa));
 
       /* 
        * The transaction was the one that was committing
        */
-      if (tdes->state == TRAN_UNACTIVE_COMMITTED_WITH_POSTPONE && !LSA_ISNULL (&tdes->undo_nxlsa))
+      if (tdes->state == TRAN_UNACTIVE_COMMITTED_WITH_POSTPONE && !LSA_ISNULL (&tdes->undo_nxlsa)
+	  && LSA_GT (&tdes->undo_nxlsa, &tdes->rcv.tran_start_postpone_lsa))
 	{
 	  /* Transaction stopped in the middle of a logical postpone. We must rollback it. */
 	  assert (tdes->topops.last == -1);
 	  log_sysop_start (thread_p);
-	  /* We need to rollback everything. */
-	  LSA_SET_NULL (&tdes->topops.stack[tdes->topops.last].lastparent_lsa);
+
+	  /* same as with the system op case, we need to set last parent to tail_topresult_lsa or
+	   * tran_start_postpone_lsa, whichever is last. */
+	  if (!LSA_ISNULL (&tdes->tail_topresult_lsa)
+	      && LSA_GT (&tdes->tail_topresult_lsa, &tdes->rcv.tran_start_postpone_lsa))
+	    {
+	      tdes->topops.stack[tdes->topops.last].lastparent_lsa = tdes->tail_topresult_lsa;
+	    }
+	  else
+	    {
+	      tdes->topops.stack[tdes->topops.last].lastparent_lsa = tdes->rcv.tran_start_postpone_lsa;
+	    }
 	  log_sysop_abort (thread_p);
 	  /* no more undo */
 	  LSA_SET_NULL (&tdes->undo_nxlsa);
 	}
 
-      log_recovery_find_first_postpone (thread_p, &first_postpone_to_apply, &tdes->posp_nxlsa, NULL, tdes);
+      log_recovery_find_first_postpone (thread_p, &first_postpone_to_apply, &tdes->posp_nxlsa, tdes);
       if (!LSA_ISNULL (&first_postpone_to_apply))
 	{
 	  log_do_postpone (thread_p, tdes, &first_postpone_to_apply);
@@ -5137,13 +5208,12 @@ error:
  *
  *   ret_lsa(out):
  *   start_postpone_lsa(in):
- *   start_postpone_run_lsa(out): run postpone lsa of start postpone
  *   tdes(in):
  *
  */
 static int
 log_recovery_find_first_postpone (THREAD_ENTRY * thread_p, LOG_LSA * ret_lsa, LOG_LSA * start_postpone_lsa,
-				  LOG_LSA * start_postpone_run_lsa, LOG_TDES * tdes)
+				  LOG_TDES * tdes)
 {
   LOG_LSA end_postpone_lsa;
   LOG_LSA start_seek_lsa;
@@ -5188,10 +5258,6 @@ log_recovery_find_first_postpone (THREAD_ENTRY * thread_p, LOG_LSA * ret_lsa, LO
     }
 
   LSA_SET_NULL (&next_postpone_lsa);
-  if (start_postpone_run_lsa)
-    {
-      LSA_SET_NULL (start_postpone_run_lsa);
-    }
 
   aligned_log_pgbuf = PTR_ALIGN (log_pgbuf, MAX_ALIGNMENT);
   log_pgptr = (LOG_PAGE *) aligned_log_pgbuf;
@@ -5310,10 +5376,6 @@ log_recovery_find_first_postpone (THREAD_ENTRY * thread_p, LOG_LSA * ret_lsa, LO
 			  /* run_postpone_log of start_postpone is found, next_postpone_lsa is the first postpone to be 
 			   * applied. */
 
-			  if (start_postpone_run_lsa != NULL)
-			    {
-			      LSA_COPY (start_postpone_run_lsa, &local_start_postpone_run_lsa);
-			    }
 			  start_postpone_lsa_wasapplied = true;
 			  isdone = true;
 			}
@@ -5331,12 +5393,8 @@ log_recovery_find_first_postpone (THREAD_ENTRY * thread_p, LOG_LSA * ret_lsa, LO
 			  {
 			    LSA_COPY (&local_start_postpone_run_lsa, &log_lsa);
 
-			    if (LSA_EQ (start_postpone_run_lsa, &sysop_end->run_postpone.postpone_lsa))
+			    if (LSA_EQ (start_postpone_lsa, &sysop_end->run_postpone.postpone_lsa))
 			      {
-				if (start_postpone_run_lsa != NULL)
-				  {
-				    LSA_COPY (start_postpone_run_lsa, &local_start_postpone_run_lsa);
-				  }
 				start_postpone_lsa_wasapplied = true;
 				isdone = true;
 			      }
@@ -5754,11 +5812,6 @@ log_rv_pack_undo_record_changes (char *ptr, int offset_to_data, int old_data_siz
  * thread_p (in) : thread entry
  * vpid_rcv (in) : page identifier
  * rcvindex (in) : recovery index of log record to redo
- *
- * note: based on recovery index we will do two types of fixing:
- *       1. if recovery index belong to any new page initialization, we will fix using fetch type NEW_PAGE
- *       2. for other indexes, we will fix the page only if it is not deallocated (if it is deallocated, recovery is
- *          not necessary).
  */
 STATIC_INLINE PAGE_PTR
 log_rv_redo_fix_page (THREAD_ENTRY * thread_p, const VPID * vpid_rcv, LOG_RCVINDEX rcvindex)
@@ -5766,9 +5819,26 @@ log_rv_redo_fix_page (THREAD_ENTRY * thread_p, const VPID * vpid_rcv, LOG_RCVIND
   PAGE_PTR page = NULL;
 
   assert (vpid_rcv != NULL && !VPID_ISNULL (vpid_rcv));
-  if (RCV_IS_NEW_PAGE_INIT (rcvindex))
+
+  /* how it works:
+   * since we are during recovery, we don't know the current state of page. it may be unreserved (its file is destroyed)
+   * or it may not be allocated. these are expected cases and we don't want to raise errors if it happens.
+   * some redo records are used to initialize a page for the first time (also setting its page type which is necessary
+   * to consider a page allocated). even first attempt to fix page fails, but the page's sector is reserved, we will
+   * fix the page as NEW_PAGE and apply its initialization redo log record.
+   */
+
+  /* let's first try to fix page if it is not deallocated. */
+  if (pgbuf_fix_if_not_deallocated (thread_p, vpid_rcv, PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH, &page)
+      != NO_ERROR)
     {
-      /* even if this is a new page, the file may have been deallocated. first check it is still reserved. */
+      ASSERT_ERROR ();
+      return NULL;
+    }
+  if (page == NULL && RCV_IS_NEW_PAGE_INIT (rcvindex))
+    {
+      /* page is deallocated. however, this is redo of a new page initialization, we still have to apply it.
+       * page must still be reserved, otherwise it means its file was completely destroyed. */
       DISK_ISVALID isvalid;
       isvalid = disk_is_page_sector_reserved (thread_p, vpid_rcv->volid, vpid_rcv->pageid);
       if (isvalid == DISK_ERROR)
@@ -5781,17 +5851,9 @@ log_rv_redo_fix_page (THREAD_ENTRY * thread_p, const VPID * vpid_rcv, LOG_RCVIND
 	  /* not reserved */
 	  return NULL;
 	}
+      assert (isvalid == DISK_VALID);
       page = pgbuf_fix (thread_p, vpid_rcv, NEW_PAGE, PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
       if (page == NULL)
-	{
-	  ASSERT_ERROR ();
-	  return NULL;
-	}
-    }
-  else
-    {
-      if (pgbuf_fix_if_not_deallocated (thread_p, vpid_rcv, PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH, &page)
-	  != NO_ERROR)
 	{
 	  ASSERT_ERROR ();
 	  return NULL;

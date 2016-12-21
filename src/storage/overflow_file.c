@@ -104,6 +104,7 @@ overflow_insert (THREAD_ENTRY * thread_p, const VFID * ovf_vfid, VPID * ovf_vpid
   VPID *vpids = NULL;
   VPID vpids_buffer[OVERFLOW_ALLOCVPID_ARRAY_SIZE + 1];
   bool is_sysop_started = false;
+  PAGE_TYPE ptype = PAGE_OVERFLOW;
 
   int error_code = NO_ERROR;
 
@@ -157,7 +158,9 @@ overflow_insert (THREAD_ENTRY * thread_p, const VFID * ovf_vfid, VPID * ovf_vpid
   log_sysop_start (thread_p);
   is_sysop_started = true;
 
-  error_code = file_alloc_multiple (thread_p, ovf_vfid, NULL, NULL, npages, vpids);
+  error_code = file_alloc_multiple (thread_p, ovf_vfid,
+				    file_type != FILE_TEMP ? file_init_page_type : file_init_temp_page_type, &ptype,
+				    npages, vpids);
   if (error_code != NO_ERROR)
     {
       ASSERT_ERROR ();
@@ -179,13 +182,13 @@ overflow_insert (THREAD_ENTRY * thread_p, const VFID * ovf_vfid, VPID * ovf_vpid
 
   for (i = 0; i < npages; i++)
     {
-      addr.pgptr = pgbuf_fix (thread_p, &vpids[i], NEW_PAGE, PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
+      addr.pgptr = pgbuf_fix (thread_p, &vpids[i], OLD_PAGE, PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
       if (addr.pgptr == NULL)
 	{
 	  ASSERT_ERROR ();
 	  goto exit_on_error;
 	}
-      pgbuf_set_page_ptype (thread_p, addr.pgptr, PAGE_OVERFLOW);
+      (void) pgbuf_check_page_ptype (thread_p, addr.pgptr, PAGE_OVERFLOW);
 
       /* Is this the first page ? */
       if (i == 0)
@@ -392,16 +395,15 @@ overflow_update (THREAD_ENTRY * thread_p, const VFID * ovf_vfid, const VPID * ov
   VPID *addr_vpid_ptr;
   LOG_DATA_ADDR addr;
   bool isnewpage = false;
-  bool is_sysop_started = false;
-
+  PAGE_TYPE ptype = PAGE_OVERFLOW;
   int error_code = NO_ERROR;
 
   assert (ovf_vfid != NULL && !VFID_ISNULL (ovf_vfid));
-  assert (file_type == FILE_MULTIPAGE_OBJECT_HEAP);	/* used only for heap for now... I left this here just in case
-							 * other file types start using this. If you hit this assert,
-							 * check the code is alright for your usage (e.g. this doesn't
-							 * consider temporary files).
-							 */
+
+  /* used only for heap for now... I left this here just in case other file types start using this.
+   * If you hit this assert, check the code is alright for your usage (e.g. this doesn't consider temporary files).
+   */
+  assert (file_type == FILE_MULTIPAGE_OBJECT_HEAP);
 
   addr.vfid = ovf_vfid;
   addr.offset = 0;
@@ -411,31 +413,16 @@ overflow_update (THREAD_ENTRY * thread_p, const VFID * ovf_vfid, const VPID * ov
   length = recdes->length;
 
   log_sysop_start (thread_p);
-  is_sysop_started = true;
 
   while (length > 0)
     {
-      if (isnewpage == true)
+      addr.pgptr = pgbuf_fix (thread_p, &next_vpid, OLD_PAGE, PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
+      if (addr.pgptr == NULL)
 	{
-	  addr.pgptr = pgbuf_fix (thread_p, &next_vpid, NEW_PAGE, PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
-	  if (addr.pgptr == NULL)
-	    {
-	      ASSERT_ERROR_AND_SET (error_code);
-	      goto exit_on_error;
-	    }
-	  pgbuf_set_page_ptype (thread_p, addr.pgptr, PAGE_OVERFLOW);
+	  ASSERT_ERROR_AND_SET (error_code);
+	  goto exit_on_error;
 	}
-      else
-	{
-	  addr.pgptr = pgbuf_fix (thread_p, &next_vpid, OLD_PAGE, PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
-	  if (addr.pgptr == NULL)
-	    {
-	      ASSERT_ERROR_AND_SET (error_code);
-	      goto exit_on_error;
-	    }
-
-	  (void) pgbuf_check_page_ptype (thread_p, addr.pgptr, PAGE_OVERFLOW);
-	}
+      (void) pgbuf_check_page_ptype (thread_p, addr.pgptr, PAGE_OVERFLOW);
 
       addr_vpid_ptr = pgbuf_get_vpid_ptr (addr.pgptr);
 
@@ -522,14 +509,7 @@ overflow_update (THREAD_ENTRY * thread_p, const VFID * ovf_vfid, const VPID * ov
       data += copy_length;
       length -= copy_length;
 
-      if (isnewpage)
-	{
-	  log_append_redo_data (thread_p, RVOVF_NEWPAGE_INSERT, &addr, copy_length + hdr_length, addr.pgptr);
-	}
-      else
-	{
-	  log_append_redo_data (thread_p, RVOVF_PAGE_UPDATE, &addr, copy_length + hdr_length, (char *) addr.pgptr);
-	}
+      log_append_redo_data (thread_p, RVOVF_PAGE_UPDATE, &addr, copy_length + hdr_length, (char *) addr.pgptr);
 
       if (length > 0)
 	{
@@ -537,7 +517,7 @@ overflow_update (THREAD_ENTRY * thread_p, const VFID * ovf_vfid, const VPID * ov
 	  if (VPID_ISNULL (&next_vpid))
 	    {
 	      /* We need to allocate a new page */
-	      error_code = file_alloc (thread_p, ovf_vfid, &next_vpid);
+	      error_code = file_alloc (thread_p, ovf_vfid, file_init_page_type, &ptype, &next_vpid, NULL);
 	      if (error_code != NO_ERROR)
 		{
 		  ASSERT_ERROR ();
@@ -617,6 +597,8 @@ overflow_update (THREAD_ENTRY * thread_p, const VFID * ovf_vfid, const VPID * ov
   return NO_ERROR;
 
 exit_on_error:
+
+  log_sysop_abort (thread_p);
 
   return error_code;
 }
@@ -1121,8 +1103,6 @@ overflow_dump (THREAD_ENTRY * thread_p, FILE * fp, VPID * ovf_vpid)
 int
 overflow_rv_newpage_insert_redo (THREAD_ENTRY * thread_p, LOG_RCV * rcv)
 {
-  (void) pgbuf_set_page_ptype (thread_p, rcv->pgptr, PAGE_OVERFLOW);
-
   return log_rv_copy_char (thread_p, rcv);
 }
 

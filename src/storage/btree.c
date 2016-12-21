@@ -1277,7 +1277,6 @@ static int btree_read_record_without_decompression (THREAD_ENTRY * thread_p, BTI
 						    DB_VALUE * key, void *rec_header, int node_type, bool * clear_key,
 						    int *offset, int copy);
 static PAGE_PTR btree_get_new_page (THREAD_ENTRY * thread_p, BTID_INT * btid, VPID * vpid, VPID * near_vpid);
-static int btree_initialize_new_page (THREAD_ENTRY * thread_p, PAGE_PTR page, void *args);
 static int btree_search_nonleaf_page (THREAD_ENTRY * thread_p, BTID_INT * btid, PAGE_PTR page_ptr, DB_VALUE * key,
 				      INT16 * slot_id, VPID * child_vpid);
 static int btree_search_leaf_page (THREAD_ENTRY * thread_p, BTID_INT * btid, PAGE_PTR page_ptr, DB_VALUE * key,
@@ -1876,7 +1875,8 @@ btree_create_overflow_key_file (THREAD_ENTRY * thread_p, BTID_INT * btid)
   /* initialize description of overflow heap file */
   btdes_ovf.btid = *btid->sys_btid;	/* structure copy */
   /* create file with at least 3 pages */
-  return file_create_with_npages (thread_p, FILE_BTREE_OVERFLOW_KEY, 3, (FILE_DESCRIPTORS *) & btdes_ovf, &btid->ovfid);
+  return file_create_with_npages (thread_p, FILE_BTREE_OVERFLOW_KEY, 3, (FILE_DESCRIPTORS *) (&btdes_ovf),
+				  &btid->ovfid);
 }
 
 /*
@@ -4823,26 +4823,15 @@ static PAGE_PTR
 btree_get_new_page (THREAD_ENTRY * thread_p, BTID_INT * btid, VPID * vpid, VPID * near_vpid)
 {
   PAGE_PTR page_ptr = NULL;
-  unsigned short alignment;
 
-  alignment = BTREE_MAX_ALIGN;
-
-  if (file_alloc_and_init (thread_p, &btid->sys_btid->vfid, btree_initialize_new_page, (void *) (&alignment), vpid)
-      != NO_ERROR)
+  if (file_alloc (thread_p, &btid->sys_btid->vfid, btree_initialize_new_page, NULL, vpid, &page_ptr) != NO_ERROR)
     {
       ASSERT_ERROR ();
       return NULL;
     }
-
-  /* 
-   * Note: we fetch the page as old since it was initialized during the
-   * allocation by btree_initialize_new_page, therefore, we care about
-   * the current content of the page.
-   */
-  page_ptr = pgbuf_fix (thread_p, vpid, OLD_PAGE, PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
   if (page_ptr == NULL)
     {
-      ASSERT_ERROR ();
+      assert_release (false);
       return NULL;
     }
   pgbuf_check_page_ptype (thread_p, page_ptr, PAGE_BTREE);
@@ -4851,26 +4840,20 @@ btree_get_new_page (THREAD_ENTRY * thread_p, BTID_INT * btid, VPID * vpid, VPID 
 }
 
 /*
- * btree_initialize_new_page () -
- *   return: bool
- *   vfid(in): File where the new page belongs
- *   file_type(in):
- *   vpid(in): The new page
- *   ignore_npages(in): Number of contiguous allocated pages (Ignored in this function. We allocate only one page)
- *   ignore_args(in): More arguments to function. Ignored at this moment.
+ * btree_initialize_new_page () - initialize a new b-tree page
  *
- * Note: Initialize a newly allocated btree page.
+ * return        : NO_ERROR
+ * thread_p (in) : thread entry
+ * page (in)     : new b-tree page
+ * args (in)     : ignored
  */
-static int
+int
 btree_initialize_new_page (THREAD_ENTRY * thread_p, PAGE_PTR page, void *args)
 {
-  unsigned short alignment;
-
   pgbuf_set_page_ptype (thread_p, page, PAGE_BTREE);
 
-  alignment = *((unsigned short *) args);
-  spage_initialize (thread_p, page, UNANCHORED_KEEP_SEQUENCE, alignment, DONT_SAFEGUARD_RVSPACE);
-  log_append_redo_data2 (thread_p, RVBT_GET_NEWPAGE, NULL, page, -1, sizeof (alignment), &alignment);
+  spage_initialize (thread_p, page, UNANCHORED_KEEP_SEQUENCE, BTREE_MAX_ALIGN, DONT_SAFEGUARD_RVSPACE);
+  log_append_redo_data2 (thread_p, RVBT_GET_NEWPAGE, NULL, page, -1, 0, NULL);
   pgbuf_set_dirty (thread_p, page, DONT_FREE);
 
   return NO_ERROR;
@@ -8626,7 +8609,11 @@ btree_dump_capacity (THREAD_ENTRY * thread_p, FILE * fp, BTID * btid)
       goto exit;
     }
 
-  class_name = heap_get_class_name (thread_p, &fdes.btree.class_oid);
+  if (heap_get_class_name (thread_p, &fdes.btree.class_oid, &class_name) != NO_ERROR)
+    {
+      ASSERT_ERROR_AND_SET (ret);
+      goto exit;
+    }
 
   /* get index name */
   ret = heap_get_indexinfo_of_btid (thread_p, &fdes.btree.class_oid, btid, NULL, NULL, NULL, NULL, &index_name, NULL);
@@ -8744,7 +8731,11 @@ btree_dump_page (THREAD_ENTRY * thread_p, FILE * fp, const OID * class_oid_p, BT
   if (class_oid_p && !OID_ISNULL (class_oid_p))
     {
       char *class_name_p = NULL;
-      class_name_p = heap_get_class_name (thread_p, class_oid_p);
+      if (heap_get_class_name (thread_p, class_oid_p, &class_name_p) != NO_ERROR)
+	{
+	  ASSERT_ERROR ();
+	  return;
+	}
 
       btree_print_space (fp, depth * 4);
       fprintf (fp, "INDEX %s ON CLASS %s (CLASS_OID:%2d|%4d|%2d) \n\n", (btname) ? btname : "*UNKNOWN-INDEX*",
@@ -9361,12 +9352,10 @@ btree_modify_leaf_ovfl_vpid (THREAD_ENTRY * thread_p, BTID_INT * btid_int, BTREE
   assert (leaf_record != NULL);
   assert (next_ovfl_vpid != NULL);
   assert (delete_helper->rv_redo_data != NULL && delete_helper->rv_redo_data_ptr != NULL);
+  assert (delete_helper->is_system_op_started);
 
-  if (delete_helper->is_system_op_started)
-    {
-      /* We need undoredo logging. */
-      rv_undo_data_ptr = rv_undo_data;
-    }
+  /* We need undoredo logging. */
+  rv_undo_data_ptr = rv_undo_data;
 
 #if !defined (NDEBUG)
   /* For debugging recovery. */
@@ -9390,23 +9379,9 @@ btree_modify_leaf_ovfl_vpid (THREAD_ENTRY * thread_p, BTID_INT * btid_int, BTREE
 
   /* Add logging. */
   BTREE_RV_GET_DATA_LENGTH (delete_helper->rv_redo_data_ptr, delete_helper->rv_redo_data, rv_redo_data_length);
-  if (delete_helper->purpose == BTREE_OP_DELETE_OBJECT_PHYSICAL)
-    {
-      /* Add undo/redo logging. */
-      assert (delete_helper->is_system_op_started == false);
-      log_append_undoredo_data (thread_p, RVBT_DELETE_OBJECT_PHYSICAL, &delete_helper->leaf_addr,
-				delete_helper->rv_keyval_data_length, rv_redo_data_length,
-				delete_helper->rv_keyval_data, delete_helper->rv_redo_data);
-    }
-  else
-    {
-      assert (delete_helper->is_system_op_started == true);
-      assert (rv_undo_data_ptr != NULL);
-
-      BTREE_RV_GET_DATA_LENGTH (rv_undo_data_ptr, rv_undo_data, rv_undo_data_length);
-      log_append_undoredo_data (thread_p, RVBT_RECORD_MODIFY_UNDOREDO, &delete_helper->leaf_addr, rv_undo_data_length,
-				rv_redo_data_length, rv_undo_data, delete_helper->rv_redo_data);
-    }
+  BTREE_RV_GET_DATA_LENGTH (rv_undo_data_ptr, rv_undo_data, rv_undo_data_length);
+  log_append_undoredo_data (thread_p, RVBT_RECORD_MODIFY_UNDOREDO, &delete_helper->leaf_addr, rv_undo_data_length,
+			    rv_redo_data_length, rv_undo_data, delete_helper->rv_redo_data);
 
   FI_TEST (thread_p, FI_TEST_BTREE_MANAGER_RANDOM_EXIT, 0);
 
@@ -9453,21 +9428,19 @@ btree_modify_overflow_link (THREAD_ENTRY * thread_p, BTID_INT * btid_int, BTREE_
   assert (ovfl_page != NULL);
   assert (next_ovfl_vpid != NULL);
   assert (delete_helper->rv_redo_data != NULL && delete_helper->rv_redo_data_ptr != NULL);
+  assert (delete_helper->is_system_op_started);
 
   /* Create record with new overflow header info and update page. */
 
-  if (delete_helper->is_system_op_started)
+  /* We need undoredo logging. */
+  overflow_header_record.area_size = sizeof (BTREE_OVERFLOW_HEADER);
+  overflow_header_record.data = rv_undo_data;
+  if (spage_get_record (ovfl_page, HEADER, &overflow_header_record, COPY) != S_SUCCESS)
     {
-      /* We need undoredo logging. */
-      overflow_header_record.area_size = sizeof (BTREE_OVERFLOW_HEADER);
-      overflow_header_record.data = rv_undo_data;
-      if (spage_get_record (ovfl_page, HEADER, &overflow_header_record, COPY) != S_SUCCESS)
-	{
-	  assert_release (false);
-	  return ER_FAILED;
-	}
-      rv_undo_data_length = sizeof (BTREE_OVERFLOW_HEADER);
+      assert_release (false);
+      return ER_FAILED;
     }
+  rv_undo_data_length = sizeof (BTREE_OVERFLOW_HEADER);
 
   /* Update overflow header info. */
   VPID_COPY (&ovf_header_info.next_vpid, next_ovfl_vpid);
@@ -9501,19 +9474,8 @@ btree_modify_overflow_link (THREAD_ENTRY * thread_p, BTID_INT * btid_int, BTREE_
 
   /* Add logging. */
   BTREE_RV_GET_DATA_LENGTH (delete_helper->rv_redo_data_ptr, delete_helper->rv_redo_data, rv_redo_data_length);
-  if (delete_helper->purpose == BTREE_OP_DELETE_OBJECT_PHYSICAL)
-    {
-      /* Add undo/redo logging. */
-      log_append_undoredo_data (thread_p, RVBT_DELETE_OBJECT_PHYSICAL, &ovf_addr, delete_helper->rv_keyval_data_length,
-				rv_redo_data_length, delete_helper->rv_keyval_data, delete_helper->rv_redo_data);
-    }
-  else
-    {
-      assert (delete_helper->is_system_op_started);
-
-      log_append_undoredo_data (thread_p, RVBT_RECORD_MODIFY_UNDOREDO, &ovf_addr, rv_undo_data_length,
-				rv_redo_data_length, rv_undo_data, delete_helper->rv_redo_data);
-    }
+  log_append_undoredo_data (thread_p, RVBT_RECORD_MODIFY_UNDOREDO, &ovf_addr, rv_undo_data_length,
+			    rv_redo_data_length, rv_undo_data, delete_helper->rv_redo_data);
 
   FI_TEST (thread_p, FI_TEST_BTREE_MANAGER_RANDOM_EXIT, 0);
 
@@ -10705,6 +10667,7 @@ btree_key_append_object_as_new_overflow (THREAD_ENTRY * thread_p, BTID_INT * bti
   char *rv_undo_data_ptr = NULL;
   int rv_undo_data_length = 0;
   int rv_redo_data_length = 0;
+  bool save_sysop_started = false;
 
   LOG_LSA prev_lsa;
 
@@ -10720,9 +10683,13 @@ btree_key_append_object_as_new_overflow (THREAD_ENTRY * thread_p, BTID_INT * bti
   assert (insert_helper->purpose == BTREE_OP_INSERT_NEW_OBJECT
 	  || insert_helper->purpose == BTREE_OP_INSERT_UNDO_PHYSICAL_DELETE);
 
-  assert (insert_helper->is_system_op_started == false);
-  log_sysop_start (thread_p);
-  insert_helper->is_system_op_started = true;
+  save_sysop_started = insert_helper->is_system_op_started;
+  if (!insert_helper->is_system_op_started)
+    {
+      log_sysop_start (thread_p);
+      insert_helper->is_system_op_started = true;
+    }
+  assert (log_check_system_op_is_started (thread_p));
   rv_undo_data_ptr = rv_undo_data;
 
   /* Create overflow page. */
@@ -10764,8 +10731,11 @@ btree_key_append_object_as_new_overflow (THREAD_ENTRY * thread_p, BTID_INT * bti
   log_append_undoredo_data (thread_p, RVBT_RECORD_MODIFY_UNDOREDO, &insert_helper->leaf_addr, rv_undo_data_length,
 			    rv_redo_data_length, rv_undo_data, insert_helper->rv_redo_data);
 
-  /* End system operation. */
-  btree_insert_sysop_end (thread_p, insert_helper);
+  if (!save_sysop_started)
+    {
+      /* End system operation. */
+      btree_insert_sysop_end (thread_p, insert_helper);
+    }
 
   btree_insert_log (insert_helper,
 		    BTREE_INSERT_MODIFY_MSG ("create new overflow") "\t" PGBUF_PAGE_STATE_MSG ("new overflow page"),
@@ -10780,7 +10750,7 @@ btree_key_append_object_as_new_overflow (THREAD_ENTRY * thread_p, BTID_INT * bti
   return NO_ERROR;
 
 error:
-  if (insert_helper->is_system_op_started)
+  if (!save_sysop_started && insert_helper->is_system_op_started)
     {
       /* This might be a problem since compensate was not successfully executed. */
       assert (insert_helper->purpose == BTREE_OP_INSERT_NEW_OBJECT);
@@ -17382,12 +17352,9 @@ btree_rv_pagerec_delete (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 int
 btree_rv_newpage_redo_init (THREAD_ENTRY * thread_p, LOG_RCV * recv)
 {
-  unsigned short alignment;
-
   (void) pgbuf_set_page_ptype (thread_p, recv->pgptr, PAGE_BTREE);
 
-  alignment = *(unsigned short *) recv->data;
-  spage_initialize (thread_p, recv->pgptr, UNANCHORED_KEEP_SEQUENCE, alignment, DONT_SAFEGUARD_RVSPACE);
+  spage_initialize (thread_p, recv->pgptr, UNANCHORED_KEEP_SEQUENCE, BTREE_MAX_ALIGN, DONT_SAFEGUARD_RVSPACE);
 
   return NO_ERROR;
 }
@@ -18264,7 +18231,7 @@ btree_set_error (THREAD_ENTRY * thread_p, DB_VALUE * key, OID * obj_oid, OID * c
   char class_oid_msg_buf[OID_MSG_BUF_SIZE];
   char oid_msg_buf[OID_MSG_BUF_SIZE];
   char *index_name;
-  char *class_name;
+  char *class_name = NULL;
   char *keyval;
 
   assert (btid != NULL);
@@ -18291,11 +18258,15 @@ btree_set_error (THREAD_ENTRY * thread_p, DB_VALUE * key, OID * obj_oid, OID * c
 
   if (class_oid != NULL && !OID_ISNULL (class_oid))
     {
-      class_name = heap_get_class_name (thread_p, class_oid);
-      if (class_name)
+      if (heap_get_class_name (thread_p, class_oid, &class_name) == NO_ERROR)
 	{
 	  snprintf (class_oid_msg_buf, OID_MSG_BUF_SIZE, "(CLASS_OID: %d|%d|%d)", class_oid->volid, class_oid->pageid,
 		    class_oid->slotid);
+	}
+      else
+	{
+	  /* ignore */
+	  er_clear ();
 	}
     }
 
@@ -20487,8 +20458,7 @@ btree_index_next_scan (THREAD_ENTRY * thread_p, int cursor, DB_VALUE ** out_valu
 
   class_oid_p = &ctx->class_oids[oid_idx];
 
-  class_name = heap_get_class_name (thread_p, class_oid_p);
-  if (class_name == NULL)
+  if (heap_get_class_name (thread_p, class_oid_p, &class_name) != NO_ERROR || class_name == NULL)
     {
       ret = S_ERROR;
       goto cleanup;
@@ -27983,7 +27953,7 @@ btree_key_relocate_last_into_ovf (THREAD_ENTRY * thread_p, BTID_INT * btid_int, 
       if (error_code != NO_ERROR)
 	{
 	  assert_release (false);
-	  return ER_FAILED;
+	  goto exit;
 	}
     }
 
@@ -28514,24 +28484,28 @@ btree_rv_record_modify_internal (THREAD_ENTRY * thread_p, LOG_RCV * rcv, bool is
   bool has_debug_info = false;
 
   /* >>>>>>>>>>>> */
-  BTREE_RV_DEBUG_ID rv_debug_id;	/* Debug ID to help developers find the source of bug in logging/recovery code. */
+  /* Debug ID to help developers find the source of bug in logging/recovery code. */
+  BTREE_RV_DEBUG_ID rv_debug_id;
   /* <<<<<<<<<<<< */
 
   /* Get flags and slot ID. */
   flags = rcv->offset & BTREE_RV_FLAGS_MASK;
   slotid = rcv->offset & (~BTREE_RV_FLAGS_MASK);
 
-  /* There are four major cases here: 1. LOG_RV_RECORD_DELETE: Key is removed completely. 2. LOG_RV_RECORD_UPDATE_ALL:
-   * Entire record is updated (overflow header). 2. LOG_RV_RECORD_INSERT: Key is inserted or overflow is created. 4.
-   * LOG_RV_RECORD_UPDATE_PARTIAL: Record is updated by bits. If is_undo flag is true, the cases are reversed. */
+  /* There are four major cases here:
+   * 1. LOG_RV_RECORD_DELETE: Key is removed completely.
+   * 2. LOG_RV_RECORD_UPDATE_ALL:
+   *    Entire record is updated (overflow header).
+   * 3. LOG_RV_RECORD_INSERT: Key is inserted or overflow is created.
+   * 4. LOG_RV_RECORD_UPDATE_PARTIAL: Record is updated by bits.
+   * If is_undo flag is true, the cases are reversed. */
 
   /* Case 1: Is key being removed completely? */
-  /* Logged by: btree_delete_key_from_leaf */
+  /* Logged by: btree_delete_key_from_leaf or btree_key_insert_new_key */
   if ((!is_undo && LOG_RV_RECORD_IS_DELETE (flags)) || (is_undo && LOG_RV_RECORD_IS_INSERT (flags)))
     {
       /* Record is completely removed from page. Redo of key removal from leaf page, when all its objects have been
-       * deleted. */
-      assert (!BTREE_RV_HAS_DEBUG_INFO (flags));
+       * deleted or undo of new key being inserted. */
 
       /* Delete key record. */
       node_header = btree_get_node_header (rcv->pgptr);
@@ -30830,7 +30804,6 @@ btree_key_remove_object_and_keep_visible_first (THREAD_ENTRY * thread_p, BTID_IN
       log_sysop_start (thread_p);
       delete_helper->is_system_op_started = true;
 
-
       error_code =
 	btree_overflow_remove_object (thread_p, key, btid_int, delete_helper, &found_page, prev_found_page, *leaf_page,
 				      &leaf_record, search_key, offset_to_second_object);
@@ -32869,8 +32842,6 @@ btree_create_file (THREAD_ENTRY * thread_p, const OID * class_oid, int attrid, B
 {
   FILE_BTREE_DES des;
   VPID vpid_root;
-  PAGE_PTR page_root;
-  unsigned short alignment;
 
   int error_code = NO_ERROR;
 
@@ -32887,7 +32858,7 @@ btree_create_file (THREAD_ENTRY * thread_p, const OID * class_oid, int attrid, B
   /* index page allocations need to be committed. they are not individually deallocated on undo; all pages are
    * deallocated when the file is destroyed. */
   log_sysop_start (thread_p);
-  error_code = file_alloc_sticky_first_page (thread_p, &btid->vfid, &vpid_root);
+  error_code = file_alloc_sticky_first_page (thread_p, &btid->vfid, btree_initialize_new_page, NULL, &vpid_root, NULL);
   if (error_code != NO_ERROR)
     {
       ASSERT_ERROR ();
@@ -32902,20 +32873,6 @@ btree_create_file (THREAD_ENTRY * thread_p, const OID * class_oid, int attrid, B
       return ER_FAILED;
     }
   btid->root_pageid = vpid_root.pageid;
-
-  /* page allocation is complete only when its type is set */
-  page_root = pgbuf_fix (thread_p, &vpid_root, NEW_PAGE, PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
-  if (page_root == NULL)
-    {
-      ASSERT_ERROR_AND_SET (error_code);
-      log_sysop_abort (thread_p);
-      return error_code;
-    }
-  pgbuf_set_page_ptype (thread_p, page_root, PAGE_BTREE);
-  alignment = BTREE_MAX_ALIGN;
-  spage_initialize (thread_p, page_root, UNANCHORED_KEEP_SEQUENCE, alignment, DONT_SAFEGUARD_RVSPACE);
-  log_append_redo_data2 (thread_p, RVBT_GET_NEWPAGE, NULL, page_root, NULL_OFFSET, sizeof (alignment), &alignment);
-  pgbuf_set_dirty_and_free (thread_p, page_root);
 
   log_sysop_commit (thread_p);
   return NO_ERROR;

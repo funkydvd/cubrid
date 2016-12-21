@@ -1947,6 +1947,9 @@ logtb_clear_tdes (THREAD_ENTRY * thread_p, LOG_TDES * tdes)
   tdes->has_deadlock_priority = false;
 
   tdes->num_log_records_written = 0;
+
+  LSA_SET_NULL (&tdes->rcv.tran_start_postpone_lsa);
+  LSA_SET_NULL (&tdes->rcv.sysop_start_postpone_lsa);
 }
 
 /*
@@ -2039,6 +2042,9 @@ logtb_initialize_tdes (LOG_TDES * tdes, int tran_index)
   logtb_set_client_ids_all (&tdes->client, BOOT_CLIENT_UNKNOWN, NULL, NULL, NULL, NULL, NULL, -1);
   tdes->block_global_oldest_active_until_commit = false;
   tdes->modified_class_list = NULL;
+
+  LSA_SET_NULL (&tdes->rcv.tran_start_postpone_lsa);
+  LSA_SET_NULL (&tdes->rcv.sysop_start_postpone_lsa);
 }
 
 /*
@@ -3003,17 +3009,15 @@ logtb_find_log_records_count (int tran_index)
  *                         TRAN_SERIALIZABLE
  *                         TRAN_REPEATABLE_READ
  *                         TRAN_READ_COMMITTED
- *   unlock_by_isolation(in): unlock by isolation during reset
  *
- * Note:Reset the default isolation level for the current transaction
- *              index (client).
+ * Note:Reset the default isolation level for the current transaction index (client).
  *
  * Note/Warning: This function must be called when the current transaction has
  *               not been done any work (i.e, just after restart, commit, or
  *               abort), otherwise, its isolation behaviour will be undefined.
  */
 int
-xlogtb_reset_isolation (THREAD_ENTRY * thread_p, TRAN_ISOLATION isolation, bool unlock_by_isolation)
+xlogtb_reset_isolation (THREAD_ENTRY * thread_p, TRAN_ISOLATION isolation)
 {
   TRAN_ISOLATION old_isolation;
   int error_code = NO_ERROR;
@@ -3027,10 +3031,6 @@ xlogtb_reset_isolation (THREAD_ENTRY * thread_p, TRAN_ISOLATION isolation, bool 
     {
       old_isolation = tdes->isolation;
       tdes->isolation = isolation;
-      if (unlock_by_isolation == true)
-	{
-	  lock_unlock_by_isolation_level (thread_p);
-	}
     }
   else
     {
@@ -6932,7 +6932,7 @@ logtb_descriptors_start_scan (THREAD_ENTRY * thread_p, int type, DB_VALUE ** arg
   void *ptr_val;
   LOG_TDES *tdes;
   DB_VALUE *vals = NULL;
-  const int num_cols = 47;
+  const int num_cols = 46;
 
   *ptr = NULL;
 
@@ -7228,7 +7228,7 @@ logtb_descriptors_start_scan (THREAD_ENTRY * thread_p, int type, DB_VALUE ** arg
 	}
       idx++;
 
-      /* Num_new_temp_temp_files */
+      /* Num_temp_files */
       db_make_int (&vals[idx], file_get_tran_num_temp_files (thread_p));
       idx++;
 

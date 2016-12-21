@@ -3548,6 +3548,8 @@ log_sysop_start (THREAD_ENTRY * thread_p)
 	  LSA_SET_NULL (&tdes->tail_lsa);
 	  LSA_SET_NULL (&tdes->undo_nxlsa);
 	  LSA_SET_NULL (&tdes->tail_topresult_lsa);
+	  LSA_SET_NULL (&tdes->rcv.tran_start_postpone_lsa);
+	  LSA_SET_NULL (&tdes->rcv.sysop_start_postpone_lsa);
 	}
     }
   else
@@ -3788,7 +3790,8 @@ log_sysop_commit_internal (THREAD_ENTRY * thread_p, LOG_REC_SYSOP_END * log_reco
 		  || tdes->state == TRAN_UNACTIVE_TOPOPE_COMMITTED_WITH_POSTPONE);
 
 	  /* this is relevant for proper recovery */
-	  log_record->run_postpone.is_sysop_postpone = (tdes->state == TRAN_UNACTIVE_TOPOPE_COMMITTED_WITH_POSTPONE);
+	  log_record->run_postpone.is_sysop_postpone =
+	    (tdes->state == TRAN_UNACTIVE_TOPOPE_COMMITTED_WITH_POSTPONE && !is_rv_finish_postpone);
 	}
       else if (log_record->type == LOG_SYSOP_END_LOGICAL_COMPENSATE)
 	{
@@ -7659,6 +7662,12 @@ log_rollback_record (THREAD_ENTRY * thread_p, LOG_LSA * log_lsa, LOG_PAGE * log_
 	{
 	  /* do nothing */
 	}
+      else if (rcvindex == RVBT_LOG_GLOBAL_UNIQUE_STATS_COMMIT)
+	{
+	  /* impossible. we cannot rollback anymore. */
+	  assert_release (false);
+	  rv_err = ER_FAILED;
+	}
       else if (RCV_IS_LOGICAL_COMPENSATE_MANUAL (rcvindex))
 	{
 	  /* B-tree logical logs will add a regular compensate in the modified pages. They do not require a logical
@@ -8289,6 +8298,8 @@ log_get_next_nested_top (THREAD_ENTRY * thread_p, LOG_TDES * tdes, LOG_LSA * sta
       if (log_rec->type == LOG_SYSOP_END)
 	{
 	  /* Read the DATA HEADER */
+	  LOG_LSA prev_tran_lsa = log_rec->back_lsa;
+
 	  LSA_COPY (&tmp_log_lsa, &top_result_lsa);
 	  LOG_READ_ADD_ALIGN (thread_p, sizeof (LOG_RECORD_HEADER), &tmp_log_lsa, log_pgptr);
 	  LOG_READ_ADVANCE_WHEN_DOESNT_FIT (thread_p, sizeof (LOG_REC_SYSOP_END), &tmp_log_lsa, log_pgptr);
@@ -8302,7 +8313,17 @@ log_get_next_nested_top (THREAD_ENTRY * thread_p, LOG_TDES * tdes, LOG_LSA * sta
 	  if (LSA_ISNULL (&prev_last_parent_lsa) || LSA_LE (&top_result_lsa, &prev_last_parent_lsa))
 	    {
 	      LSA_COPY (&(nxtop_stack[nxtop_count].start_lsa), &top_result->lastparent_lsa);
-	      LSA_COPY (&(nxtop_stack[nxtop_count].end_lsa), &top_result_lsa);
+	      if (top_result->type == LOG_SYSOP_END_LOGICAL_RUN_POSTPONE)
+		{
+		  /* we need to process this log record. end range at previous log record. */
+		  LSA_COPY (&(nxtop_stack[nxtop_count].end_lsa), &prev_tran_lsa);
+		}
+	      else
+		{
+		  /* end range at system op end log record */
+		  LSA_COPY (&(nxtop_stack[nxtop_count].end_lsa), &top_result_lsa);
+		}
+
 	      nxtop_count++;
 
 	      LSA_COPY (&prev_last_parent_lsa, &top_result->lastparent_lsa);
@@ -10040,6 +10061,8 @@ log_read_sysop_start_postpone (THREAD_ENTRY * thread_p, LOG_LSA * log_lsa, LOG_P
   /* skip log record header */
   LOG_READ_ADD_ALIGN (thread_p, sizeof (LOG_RECORD_HEADER), log_lsa, log_page);
 
+  /* read sysop_start_postpone */
+  LOG_READ_ADVANCE_WHEN_DOESNT_FIT (thread_p, sizeof (LOG_REC_SYSOP_START_POSTPONE), log_lsa, log_page);
   *sysop_start_postpone = *(LOG_REC_SYSOP_START_POSTPONE *) (log_page->area + log_lsa->offset);
   if (!with_undo_data
       || (sysop_start_postpone->sysop_end.type != LOG_SYSOP_END_LOGICAL_UNDO

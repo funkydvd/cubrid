@@ -2577,11 +2577,8 @@ heap_classrepr_dump (THREAD_ENTRY * thread_p, FILE * fp, const OID * class_oid, 
       goto exit_on_error;
     }
 
-  classname = heap_get_class_name (thread_p, class_oid);
-  if (classname == NULL)
-    {
-      goto exit_on_error;
-    }
+  classname = or_class_name (&recdes);
+  assert (classname != NULL);
 
   fprintf (fp, "\n");
   fprintf (fp,
@@ -2590,7 +2587,6 @@ heap_classrepr_dump (THREAD_ENTRY * thread_p, FILE * fp, const OID * class_oid, 
 	   (int) class_oid->volid, class_oid->pageid, (int) class_oid->slotid, classname, repr->id, repr->n_attributes,
 	   (repr->n_attributes - repr->n_variable - repr->n_shared_attrs - repr->n_class_attrs), repr->n_variable,
 	   repr->n_shared_attrs, repr->n_class_attrs, repr->fixed_length);
-  free_and_init (classname);
 
   if (repr->n_attributes > 0)
     {
@@ -2625,9 +2621,9 @@ heap_classrepr_dump (THREAD_ENTRY * thread_p, FILE * fp, const OID * class_oid, 
 
       if (!OID_ISNULL (&attrepr->classoid) && !OID_EQ (&attrepr->classoid, class_oid))
 	{
-	  classname = heap_get_class_name (thread_p, &attrepr->classoid);
-	  if (classname == NULL)
+	  if (heap_get_class_name (thread_p, &attrepr->classoid, &classname) != NO_ERROR || classname == NULL)
 	    {
+	      ASSERT_ERROR_AND_SET (ret);
 	      goto exit_on_error;
 	    }
 	  fprintf (fp, " Inherited from Class: oid = %d|%d|%d, Name = %s\n", (int) attrepr->classoid.volid,
@@ -4144,7 +4140,7 @@ heap_vpid_alloc (THREAD_ENTRY * thread_p, const HFID * hfid, PAGE_PTR hdr_pgptr,
   HEAP_PAGE_SET_VACUUM_STATUS (&new_page_chain, HEAP_PAGE_VACUUM_NONE);
 
   /* allocate new page and initialize it */
-  error_code = file_alloc_and_init (thread_p, &hfid->vfid, heap_vpid_init_new, &new_page_chain, &vpid);
+  error_code = file_alloc (thread_p, &hfid->vfid, heap_vpid_init_new, &new_page_chain, &vpid, NULL);
   if (error_code != NO_ERROR)
     {
       ASSERT_ERROR ();
@@ -4629,13 +4625,13 @@ heap_remove_page_on_vacuum (THREAD_ENTRY * thread_p, PAGE_PTR * page_ptr, HFID *
   /* recheck the dealloc flag after all latches are acquired */
   if (pgbuf_has_prevent_dealloc (crt_watcher.pgptr))
     {
-      assert (pgbuf_has_any_waiters (crt_watcher.pgptr) == false);
       /* Even though we have fixed all required pages, somebody was doing a heap scan, and already reached our page. We 
        * cannot deallocate it. */
       vacuum_er_log (VACUUM_ER_LOG_HEAP | VACUUM_ER_LOG_WARNING,
 		     "VACUUM: Candidate heap page %d|%d to remove has waiters.\n", page_vpid.volid, page_vpid.pageid);
       goto error;
     }
+  assert (pgbuf_has_any_waiters (crt_watcher.pgptr) == false);
 
   /* Start changes under the protection of system operation. */
   log_sysop_start (thread_p);
@@ -5023,6 +5019,7 @@ heap_create_internal (THREAD_ENTRY * thread_p, HFID * hfid, const OID * class_oi
   int i;
   FILE_HEAP_DES hfdes;
   const FILE_TYPE file_type = reuse_oid ? FILE_HEAP_REUSE_SLOTS : FILE_HEAP;
+  PAGE_TYPE ptype = PAGE_HEAP;
 
   int error_code = NO_ERROR;
 
@@ -5099,7 +5096,8 @@ heap_create_internal (THREAD_ENTRY * thread_p, HFID * hfid, const OID * class_oi
       ASSERT_ERROR ();
       goto error;
     }
-  error_code = file_alloc_sticky_first_page (thread_p, &hfid->vfid, &vpid);
+  error_code = file_alloc_sticky_first_page (thread_p, &hfid->vfid, file_init_page_type, &ptype, &vpid,
+					     &addr_hdr.pgptr);
   if (error_code != NO_ERROR)
     {
       ASSERT_ERROR ();
@@ -5112,12 +5110,10 @@ heap_create_internal (THREAD_ENTRY * thread_p, HFID * hfid, const OID * class_oi
       error_code = ER_FAILED;
       goto error;
     }
-
-  addr_hdr.pgptr = pgbuf_fix (thread_p, &vpid, NEW_PAGE, PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
   if (addr_hdr.pgptr == NULL)
     {
       /* something went wrong, destroy the file, and return */
-      ASSERT_ERROR_AND_SET (error_code);
+      assert_release (false);
       goto error;
     }
 
@@ -7024,30 +7020,12 @@ static int
 heap_scancache_end_internal (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * scan_cache, bool scan_state)
 {
   int ret = NO_ERROR;
-  HEAP_SCANCACHE_NODE_LIST *p = NULL;
 
   if (scan_cache->debug_initpattern != HEAP_DEBUG_SCANCACHE_INITPATTERN)
     {
       er_log_debug (ARG_FILE_LINE, "heap_scancache_end_internal: Your scancache is not initialized");
       return ER_FAILED;
     }
-
-  if (!OID_ISNULL (&scan_cache->node.class_oid))
-    {
-      lock_unlock_scan (thread_p, &scan_cache->node.class_oid, scan_state);
-    }
-
-  p = scan_cache->partition_list;
-  while (p != NULL)
-    {
-      if (!OID_EQ (&p->node.class_oid, &scan_cache->node.class_oid))
-	{
-	  lock_unlock_scan (thread_p, &p->node.class_oid, scan_state);
-	}
-      p = p->next;
-    }
-
-  OID_SET_NULL (&scan_cache->node.class_oid);
 
   ret = heap_scancache_quick_end (thread_p, scan_cache);
 
@@ -9204,113 +9182,89 @@ heap_get_class_oid (THREAD_ENTRY * thread_p, const OID * oid, OID * class_oid)
 
 /*
  * heap_get_class_name () - Find classname when oid is a class
- *   return: Classname or NULL. The classname space must be
- *           released by the caller.
- *   class_oid(in): The Class Object identifier
+ *   return: error_code
  *
- * Note: Find the name of the given class identifier. If the passed OID
- * is not a class, it return NULL.
+ *   class_oid(in): The Class Object identifier
+ *   class_name(out): Reference of the Class name pointer where name will reside; 
+ *		      The classname space must be released by the caller.
+ *
+ * Note: Find the name of the given class identifier. It asserts that the given OID is class OID.
  *
  * Note: Classname pointer must be released by the caller using free_and_init
  */
-char *
-heap_get_class_name (THREAD_ENTRY * thread_p, const OID * class_oid)
+int
+heap_get_class_name (THREAD_ENTRY * thread_p, const OID * class_oid, char **class_name)
 {
-  return heap_get_class_name_alloc_if_diff (thread_p, class_oid, NULL);
+  return heap_get_class_name_alloc_if_diff (thread_p, class_oid, NULL, class_name);
 }
 
 /*
  * heap_get_class_name_alloc_if_diff () - Get the name of given class
  *                               name is malloc when different than given name
- *   return: guess_classname when it is the real name. Don't need to free.
- *           malloc classname when different from guess_classname.
- *           Must be free by caller (free_and_init)
- *           NULL some kind of error
+ *   return: error_code if error(other than ER_HEAP_NODATA_NEWADDRESS) occur
+ *
  *   class_oid(in): The Class Object identifier
  *   guess_classname(in): Guess name of class
+ *   classname_out(out):  guess_classname when it is the real name. Don't need to free.
+ *			  malloc classname when different from guess_classname.
+ *			  Must be free by caller (free_and_init)
+ *			  NULL in case of error
  *
  * Note: Find the name of the given class identifier. If the name is
  * the same as the guessed name, the guessed name is returned.
  * Otherwise, an allocated area with the name of the class is
- * returned. If an error is found or the passed OID is not a
- * class, NULL is returned.
+ * returned. 
  */
-char *
-heap_get_class_name_alloc_if_diff (THREAD_ENTRY * thread_p, const OID * class_oid, char *guess_classname)
+int
+heap_get_class_name_alloc_if_diff (THREAD_ENTRY * thread_p, const OID * class_oid, char *guess_classname,
+				   char **classname_out)
 {
   char *classname = NULL;
-  char *copy_classname = NULL;
   RECDES recdes;
   HEAP_SCANCACHE scan_cache;
-  OID root_oid = OID_INITIALIZER;
-  HEAP_GET_CONTEXT context;
+  int error_code = NO_ERROR;
 
-  heap_scancache_quick_start_root_hfid (thread_p, &scan_cache);
-  heap_init_get_context (thread_p, &context, class_oid, &root_oid, &recdes, &scan_cache, PEEK, NULL_CHN);
+  (void) heap_scancache_quick_start_root_hfid (thread_p, &scan_cache);
 
-  if (heap_get_last_version (thread_p, &context) == S_SUCCESS)
+  if (heap_get_class_record (thread_p, class_oid, &recdes, &scan_cache, PEEK) == S_SUCCESS)
     {
-      /* Make sure that this is a class */
-      if (oid_is_root (&root_oid))
+      classname = or_class_name (&recdes);
+      if (guess_classname == NULL || strcmp (guess_classname, classname) != 0)
 	{
-	  classname = or_class_name (&recdes);
-	  if (guess_classname == NULL || strcmp (guess_classname, classname) != 0)
+	  /* 
+	   * The names are different.. return a copy that must be freed.
+	   */
+	  *classname_out = strdup (classname);
+	  if (*classname_out == NULL)
 	    {
-	      /* 
-	       * The names are different.. return a copy that must be freed.
-	       */
-	      copy_classname = strdup (classname);
-	      if (copy_classname == NULL)
-		{
-		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
-			  (strlen (classname) + 1) * sizeof (char));
-		}
+	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1,
+		      (strlen (classname) + 1) * sizeof (char));
+	      error_code = ER_FAILED;
 	    }
-	  else
-	    {
-	      /* 
-	       * The classnames are identical
-	       */
-	      copy_classname = guess_classname;
-	    }
+	}
+      else
+	{
+	  /* 
+	   * The classnames are identical
+	   */
+	  *classname_out = guess_classname;
 	}
     }
   else
     {
-      if (er_errid () == ER_HEAP_NODATA_NEWADDRESS)
+      ASSERT_ERROR_AND_SET (error_code);
+      *classname_out = NULL;
+      if (error_code == ER_HEAP_NODATA_NEWADDRESS)
 	{
-	  er_clear ();		/* clear ER_HEAP_NODATA_NEWADDRESS */
+	  /* clear ER_HEAP_NODATA_NEWADDRESS */
+	  er_clear ();
+	  error_code = NO_ERROR;
 	}
     }
 
-  heap_clean_get_context (thread_p, &context);
   heap_scancache_end (thread_p, &scan_cache);
 
-  return copy_classname;
-}
-
-/*
- * heap_get_class_name_of_instance () - Find classname of given instance
- *   return: Classname or NULL. The classname space must be
- *           released by the caller.
- *   inst_oid(in): The instance object identifier
- *
- * Note: Find the class name of the class of given instance identifier.
- *
- * Note: Classname pointer must be released by the caller using free_and_init
- */
-char *
-heap_get_class_name_of_instance (THREAD_ENTRY * thread_p, const OID * inst_oid)
-{
-  char *classname = NULL;
-  OID class_oid;
-
-  if (heap_get_class_oid (thread_p, inst_oid, &class_oid) == S_SUCCESS)
-    {
-      classname = heap_get_class_name_alloc_if_diff (thread_p, &class_oid, NULL);
-    }
-
-  return classname;
+  return error_code;
 }
 
 /*
@@ -11694,9 +11648,8 @@ heap_attrinfo_transform_to_disk_internal (THREAD_ENTRY * thread_p, HEAP_CACHE_AT
 			  continue;
 			}
 
-		      new_meta_data = heap_get_class_name (thread_p, &(attr_info->class_oid));
-
-		      if (new_meta_data == NULL)
+		      if (heap_get_class_name (thread_p, &(attr_info->class_oid), &new_meta_data) != NO_ERROR
+			  || new_meta_data == NULL)
 			{
 			  status = S_ERROR;
 			  break;
@@ -14119,52 +14072,54 @@ heap_dump (THREAD_ENTRY * thread_p, FILE * fp, HFID * hfid, bool dump_records)
       ASSERT_ERROR ();
       return;
     }
-  if (OID_ISNULL (&fdes.heap.class_oid))
-    {
-      assert_release (false);
-      return;
-    }
 
-  if (heap_attrinfo_start (thread_p, &fdes.heap.class_oid, -1, NULL, &attr_info) != NO_ERROR)
+  if (!OID_ISNULL (&fdes.heap.class_oid))
     {
-      return;
-    }
-
-  ret = heap_classrepr_dump (thread_p, fp, &fdes.heap.class_oid, attr_info.last_classrepr);
-  if (ret != NO_ERROR)
-    {
-      heap_attrinfo_end (thread_p, &attr_info);
-      return;
-    }
-
-  /* Dump individual Objects */
-  if (dump_records == true)
-    {
-      if (heap_scancache_start (thread_p, &scan_cache, hfid, NULL, true, false, NULL) != NO_ERROR)
+      if (heap_attrinfo_start (thread_p, &fdes.heap.class_oid, -1, NULL, &attr_info) != NO_ERROR)
 	{
-	  /* something went wrong, return */
+	  return;
+	}
+
+      ret = heap_classrepr_dump (thread_p, fp, &fdes.heap.class_oid, attr_info.last_classrepr);
+      if (ret != NO_ERROR)
+	{
 	  heap_attrinfo_end (thread_p, &attr_info);
 	  return;
 	}
 
-      OID_SET_NULL (&oid);
-      oid.volid = hfid->vfid.volid;
-
-      while (heap_next (thread_p, hfid, NULL, &oid, &peek_recdes, &scan_cache, PEEK) == S_SUCCESS)
+      /* Dump individual Objects */
+      if (dump_records == true)
 	{
-	  fprintf (fp, "Object-OID = %2d|%4d|%2d,\n  Length on disk = %d,\n", oid.volid, oid.pageid, oid.slotid,
-		   peek_recdes.length);
-
-	  if (heap_attrinfo_read_dbvalues (thread_p, &oid, &peek_recdes, NULL, &attr_info) != NO_ERROR)
+	  if (heap_scancache_start (thread_p, &scan_cache, hfid, NULL, true, false, NULL) != NO_ERROR)
 	    {
-	      fprintf (fp, "  Error ... continue\n");
-	      continue;
+	      /* something went wrong, return */
+	      heap_attrinfo_end (thread_p, &attr_info);
+	      return;
 	    }
-	  heap_attrinfo_dump (thread_p, fp, &attr_info, false);
+
+	  OID_SET_NULL (&oid);
+	  oid.volid = hfid->vfid.volid;
+
+	  while (heap_next (thread_p, hfid, NULL, &oid, &peek_recdes, &scan_cache, PEEK) == S_SUCCESS)
+	    {
+	      fprintf (fp, "Object-OID = %2d|%4d|%2d,\n  Length on disk = %d,\n", oid.volid, oid.pageid, oid.slotid,
+		       peek_recdes.length);
+
+	      if (heap_attrinfo_read_dbvalues (thread_p, &oid, &peek_recdes, NULL, &attr_info) != NO_ERROR)
+		{
+		  fprintf (fp, "  Error ... continue\n");
+		  continue;
+		}
+	      heap_attrinfo_dump (thread_p, fp, &attr_info, false);
+	    }
+	  heap_scancache_end (thread_p, &scan_cache);
 	}
-      heap_scancache_end (thread_p, &scan_cache);
+      heap_attrinfo_end (thread_p, &attr_info);
     }
-  heap_attrinfo_end (thread_p, &attr_info);
+  else
+    {
+      /* boot_Db_parm.hfid */
+    }
 
   fprintf (fp, "\n\n*** END OF DUMP FOR HEAP FILE ***\n\n");
 }
@@ -14218,19 +14173,22 @@ heap_dump_capacity (THREAD_ENTRY * thread_p, FILE * fp, const HFID * hfid)
       ASSERT_ERROR ();
       return error_code;
     }
-  if (OID_ISNULL (&fdes.heap.class_oid))
+
+  if (!OID_ISNULL (&fdes.heap.class_oid))
     {
-      assert_release (false);
-      return ER_FAILED;
+      error_code = heap_attrinfo_start (thread_p, &fdes.heap.class_oid, -1, NULL, &attr_info);
+      if (error_code != NO_ERROR)
+	{
+	  ASSERT_ERROR ();
+	  return error_code;
+	}
+      (void) heap_classrepr_dump (thread_p, fp, &fdes.heap.class_oid, attr_info.last_classrepr);
+      heap_attrinfo_end (thread_p, &attr_info);
     }
-  error_code = heap_attrinfo_start (thread_p, &fdes.heap.class_oid, -1, NULL, &attr_info);
-  if (error_code != NO_ERROR)
+  else
     {
-      ASSERT_ERROR ();
-      return error_code;
+      /* boot_Db_parm.hfid */
     }
-  (void) heap_classrepr_dump (thread_p, fp, &fdes.heap.class_oid, attr_info.last_classrepr);
-  heap_attrinfo_end (thread_p, &attr_info);
 
   fprintf (fp, "\n");
   return NO_ERROR;
@@ -16447,10 +16405,9 @@ heap_set_autoincrement_value (THREAD_ENTRY * thread_p, HEAP_CACHE_ATTRINFO * att
 		  goto exit_on_error;
 		}
 
-	      classname = heap_get_class_name (thread_p, &(att->classoid));
-	      if (classname == NULL)
+	      if (heap_get_class_name (thread_p, &(att->classoid), &classname) != NO_ERROR || classname == NULL)
 		{
-		  ret = ER_FAILED;
+		  ASSERT_ERROR_AND_SET (ret);
 		  goto exit_on_error;
 		}
 
@@ -16786,10 +16743,10 @@ heap_classrepr_dump_all (THREAD_ENTRY * thread_p, FILE * fp, OID * class_oid)
   char *classname;
   bool need_free_classname = false;
 
-  classname = heap_get_class_name (thread_p, class_oid);
-  if (classname == NULL)
+  if (heap_get_class_name (thread_p, class_oid, &classname) != NO_ERROR || classname == NULL)
     {
       classname = (char *) "unknown";
+      er_clear ();
     }
   else
     {
@@ -17114,10 +17071,12 @@ heap_object_upgrade_domain (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * upd_scanca
 	    {
 	      set_default_value = true;
 	    }
+	  /* clear the error */
+	  er_clear ();
 
 	  log_warning = true;
 
-	  /* the casted value will be overwriten, so a clear is needed, here */
+	  /* the casted value will be overwritten, so a clear is needed, here */
 	  pr_clear_value (&(value->dbvalue));
 
 	  if (set_max_value)
@@ -17307,7 +17266,7 @@ heap_eval_function_index (THREAD_ENTRY * thread_p, FUNCTION_INDEX_INFO * func_in
       /* insert case, read the values */
       if (func_pred == NULL)
 	{
-	  if (stx_map_stream_to_func_pred (NULL, (FUNC_PRED **) (&func_pred), expr_stream, expr_stream_size,
+	  if (stx_map_stream_to_func_pred (thread_p, (FUNC_PRED **) (&func_pred), expr_stream, expr_stream_size,
 					   &unpack_info))
 	    {
 	      error = ER_FAILED;
@@ -17442,8 +17401,8 @@ heap_init_func_pred_unpack_info (THREAD_ENTRY * thread_p, HEAP_CACHE_ATTRINFO * 
 		}
 	    }
 
-	  if (stx_map_stream_to_func_pred (thread_p, (FUNC_PRED **) (&(fi_preds[i].func_pred)), fi_info->expr_stream,
-					   fi_info->expr_stream_size, &(fi_preds[i].unpack_info)))
+	  if (stx_map_stream_to_func_pred (thread_p, (FUNC_PRED **) (&(fi_preds[i].func_pred)),
+					   fi_info->expr_stream, fi_info->expr_stream_size, &(fi_preds[i].unpack_info)))
 	    {
 	      error_status = ER_FAILED;
 	      goto error;
@@ -17720,11 +17679,9 @@ heap_header_next_scan (THREAD_ENTRY * thread_p, int cursor, DB_VALUE ** out_valu
 
   heap_hdr = (HEAP_HDR_STATS *) hdr_recdes.data;
 
-  class_name = heap_get_class_name (thread_p, &(heap_hdr->class_oid));
-  if (class_name == NULL)
+  if (heap_get_class_name (thread_p, &(heap_hdr->class_oid), &class_name) != NO_ERROR || class_name == NULL)
     {
-      assert (er_errid () != NO_ERROR);
-      error = er_errid ();
+      ASSERT_ERROR_AND_SET (error);
       goto cleanup;
     }
 
@@ -17956,12 +17913,6 @@ heap_capacity_next_scan (THREAD_ENTRY * thread_p, int cursor, DB_VALUE ** out_va
       ASSERT_ERROR ();
       goto cleanup;
     }
-  if (OID_ISNULL (&fdes.heap.class_oid))
-    {
-      assert_release (false);
-      error = ER_FAILED;
-      goto cleanup;
-    }
 
   error = heap_attrinfo_start (thread_p, &fdes.heap.class_oid, -1, NULL, &attr_info);
   if (error != NO_ERROR)
@@ -17980,11 +17931,9 @@ heap_capacity_next_scan (THREAD_ENTRY * thread_p, int cursor, DB_VALUE ** out_va
       goto cleanup;
     }
 
-  classname = heap_get_class_name (thread_p, &fdes.heap.class_oid);
-  if (classname == NULL)
+  if (heap_get_class_name (thread_p, &fdes.heap.class_oid, &classname) != NO_ERROR || classname == NULL)
     {
-      assert (er_errid () != NO_ERROR);
-      error = er_errid ();
+      ASSERT_ERROR_AND_SET (error);
       goto cleanup;
     }
 
@@ -18790,13 +18739,10 @@ heap_get_bigone_content (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * scan_cache, i
       if (scan_cache->area == NULL)
 	{
 	  /* 
-	   * Allocate an area to hold the object. Assume that the object
-	   * will fit in two pages for not better estimates. We could call
-	   * heap_ovf_get_length, but it may be better to just guess and
-	   * realloc if needed.
-	   * We could also check the estimates for average object length,
-	   * but again, it may be expensive and may not be accurate
-	   * for this object.
+	   * Allocate an area to hold the object. Assume that the object will fit in two pages for not better estimates.
+	   * We could call heap_ovf_get_length, but it may be better to just guess and realloc if needed.
+	   * We could also check the estimates for average object length, but again, it may be expensive and may not be
+	   * accurate for this object.
 	   */
 	  scan_cache->area_size = DB_PAGESIZE * 2;
 	  scan_cache->area = (char *) db_private_alloc (thread_p, scan_cache->area_size);
@@ -19489,9 +19435,9 @@ heap_mark_class_as_modified (THREAD_ENTRY * thread_p, OID * oid_p, int chn, bool
       return NO_ERROR;
     }
 
-  classname = heap_get_class_name (thread_p, oid_p);
-  if (classname == NULL)
+  if (heap_get_class_name (thread_p, oid_p, &classname) != NO_ERROR || classname == NULL)
     {
+      ASSERT_ERROR ();
       return ER_FAILED;
     }
   if (log_add_to_modified_class_list (thread_p, classname, oid_p) != NO_ERROR)
@@ -23376,6 +23322,7 @@ heap_hfid_cache_get (THREAD_ENTRY * thread_p, const OID * class_oid, HFID * hfid
 	  assert_release (false);
 	  boot_find_root_heap (&entry->hfid);
 	  entry->ftype = FILE_HEAP;
+	  lf_tran_end_with_mb (t_entry);
 	  return NO_ERROR;
 	}
 
@@ -23386,6 +23333,7 @@ heap_hfid_cache_get (THREAD_ENTRY * thread_p, const OID * class_oid, HFID * hfid
       if (error_code != NO_ERROR)
 	{
 	  ASSERT_ERROR ();
+	  lf_tran_end_with_mb (t_entry);
 	  return error_code;
 	}
       entry->hfid = hfid_local;
@@ -23399,6 +23347,7 @@ heap_hfid_cache_get (THREAD_ENTRY * thread_p, const OID * class_oid, HFID * hfid
       if (error_code != NO_ERROR)
 	{
 	  ASSERT_ERROR ();
+	  lf_tran_end_with_mb (t_entry);
 	  return error_code;
 	}
       entry->ftype = ftype_local;
@@ -24205,6 +24154,15 @@ heap_get_visible_version_internal (THREAD_ENTRY * thread_p, HEAP_GET_CONTEXT * c
       context->class_oid_p = &class_oid_local;
     }
 
+  if (context->scan_cache && context->ispeeking == COPY && context->recdes_p != NULL)
+    {
+      /* Allocate an area to hold the object. Assume that the object will fit in two pages for not better estimates. */
+      if (heap_scan_cache_allocate_area (thread_p, context->scan_cache, DB_PAGESIZE * 2) != NO_ERROR)
+	{
+	  return S_ERROR;
+	}
+    }
+
   scan = heap_prepare_get_context (thread_p, context, context->latch_mode, is_heap_scan, LOG_WARNING_IF_DELETED);
   if (scan != S_SUCCESS)
     {
@@ -24401,6 +24359,15 @@ heap_get_last_version (THREAD_ENTRY * thread_p, HEAP_GET_CONTEXT * context)
   assert (context->scan_cache != NULL);
   assert (context->recdes_p != NULL);
 
+  if (context->scan_cache && context->ispeeking == COPY)
+    {
+      /* Allocate an area to hold the object. Assume that the object will fit in two pages for not better estimates. */
+      if (heap_scan_cache_allocate_area (thread_p, context->scan_cache, DB_PAGESIZE * 2) != NO_ERROR)
+	{
+	  return S_ERROR;
+	}
+    }
+
   scan = heap_prepare_get_context (thread_p, context, context->latch_mode, false, LOG_WARNING_IF_DELETED);
   if (scan != S_SUCCESS)
     {
@@ -24565,11 +24532,49 @@ heap_init_get_context (THREAD_ENTRY * thread_p, HEAP_GET_CONTEXT * context, cons
     }
 }
 
+/*
+ * heap_scan_cache_allocate_area () - Allocate scan_cache area
+ *
+ * return: error code
+ * thread_p (in) : Thread entry.
+ * scan_cache_p (in) : Scan cache.
+ * size (in) : Required size of recdes data.
+ */
+int
+heap_scan_cache_allocate_area (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * scan_cache_p, int size)
+{
+  assert (scan_cache_p != NULL && size > 0);
+  if (scan_cache_p->area == NULL)
+    {
+      /* Allocate an area to hold the object. Assume that the object will fit in two pages for not better estimates. */
+      scan_cache_p->area = (char *) db_private_alloc (thread_p, size);
+      if (scan_cache_p->area == NULL)
+	{
+	  scan_cache_p->area_size = -1;
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, size);
+	  return ER_OUT_OF_VIRTUAL_MEMORY;
+	}
+      scan_cache_p->area_size = size;
+    }
+  else if (scan_cache_p->area_size < size)
+    {
+      scan_cache_p->area = (char *) db_private_realloc (thread_p, scan_cache_p->area, size);
+      if (scan_cache_p->area == NULL)
+	{
+	  scan_cache_p->area_size = -1;
+	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, size);
+	  return ER_OUT_OF_VIRTUAL_MEMORY;
+	}
+      scan_cache_p->area_size = size;
+    }
+
+  return NO_ERROR;
+}
 
 /*
  * heap_scan_cache_allocate_recdes_data () - Allocate recdes data and set it to recdes
  * 
- * return NO_ERROR or ER_FAILED
+ * return: error code 
  * thread_p (in) : Thread entry.
  * scan_cache_p (in) : Scan cache.
  * recdes_p (in) : Record descriptor.
@@ -24579,21 +24584,15 @@ static int
 heap_scan_cache_allocate_recdes_data (THREAD_ENTRY * thread_p, HEAP_SCANCACHE * scan_cache_p, RECDES * recdes_p,
 				      int size)
 {
+  int error_code;
   assert (scan_cache_p != NULL && recdes_p != NULL);
 
-  if (scan_cache_p->area == NULL)
+  error_code = heap_scan_cache_allocate_area (thread_p, scan_cache_p, size);
+  if (error_code != NO_ERROR)
     {
-      /* Allocate an area to hold the object. Assume that the object will fit in two pages for not better
-       * estimates. */
-      scan_cache_p->area_size = size;
-      scan_cache_p->area = (char *) db_private_alloc (thread_p, scan_cache_p->area_size);
-      if (scan_cache_p->area == NULL)
-	{
-	  scan_cache_p->area_size = -1;
-	  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_OUT_OF_VIRTUAL_MEMORY, 1, size);
-	  return ER_FAILED;
-	}
+      return error_code;
     }
+
   recdes_p->data = scan_cache_p->area;
   recdes_p->area_size = scan_cache_p->area_size;
 
@@ -24622,7 +24621,6 @@ heap_get_class_record (THREAD_ENTRY * thread_p, const OID * class_oid, RECDES * 
   /* for debugging set root_oid NULL and check afterwards if it really is root oid */
   OID_SET_NULL (&root_oid);
 #endif /* !NDEBUG */
-
   heap_init_get_context (thread_p, &context, class_oid, &root_oid, recdes_p, scan_cache, ispeeking, NULL_CHN);
 
   scan = heap_get_last_version (thread_p, &context);

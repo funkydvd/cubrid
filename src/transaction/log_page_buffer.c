@@ -3724,6 +3724,16 @@ prior_lsa_next_record_internal (THREAD_ENTRY * thread_p, LOG_PRIOR_NODE * node, 
        * protection */
       tdes->rcv.sysop_start_postpone_lsa = start_lsa;
     }
+  else if (node->log_header.type == LOG_SYSOP_END)
+    {
+      /* reset tdes->rcv.sysop_start_postpone_lsa */
+      LSA_SET_NULL (&tdes->rcv.sysop_start_postpone_lsa);
+    }
+  else if (node->log_header.type == LOG_COMMIT_WITH_POSTPONE)
+    {
+      /* we need the commit with postpone LSA for recovery. we have to save it under prior_lsa_mutex protection */
+      tdes->rcv.tran_start_postpone_lsa = start_lsa;
+    }
 
   LOG_PRIOR_LSA_APPEND_ADVANCE_WHEN_DOESNOT_FIT (node->data_header_length);
   LOG_PRIOR_LSA_APPEND_ADD_ALIGN (node->data_header_length);
@@ -7761,6 +7771,7 @@ logpb_checkpoint (THREAD_ENTRY * thread_p)
 	  LSA_COPY (&chkpt_one->posp_nxlsa, &act_tdes->posp_nxlsa);
 	  LSA_COPY (&chkpt_one->savept_lsa, &act_tdes->savept_lsa);
 	  LSA_COPY (&chkpt_one->tail_topresult_lsa, &act_tdes->tail_topresult_lsa);
+	  LSA_COPY (&chkpt_one->start_postpone_lsa, &act_tdes->rcv.tran_start_postpone_lsa);
 	  strncpy (chkpt_one->user_name, act_tdes->client.db_user, LOG_USERNAME_MAX);
 	  ntrans++;
 	  if (act_tdes->topops.last >= 0 && (act_tdes->state == TRAN_UNACTIVE_TOPOPE_COMMITTED_WITH_POSTPONE))
@@ -7816,37 +7827,34 @@ logpb_checkpoint (THREAD_ENTRY * thread_p)
 	      continue;
 	    }
 	  act_tdes = LOG_FIND_TDES (i);
-	  if (act_tdes != NULL && act_tdes->trid != NULL_TRANID)
+	  if (act_tdes != NULL && act_tdes->trid != NULL_TRANID
+	      && !LSA_ISNULL (&act_tdes->rcv.sysop_start_postpone_lsa))
 	    {
-	      for (j = 0; j < act_tdes->topops.last + 1; j++)
+	      /* this transaction is running system operation postpone.
+	       * note: we cannot compare act_tdes->state with TRAN_UNACTIVE_TOPOPE_COMMITTED_WITH_POSTPONE. we are
+	       *       not synchronizing setting transaction state.
+	       *       however, setting tdes->rcv.sysop_start_postpone_lsa is protected by
+	       *       log_Gl.prior_info.prior_lsa_mutex. so we check this instead of state.
+	       */
+	      if (ntops >= tmp_chkpt.ntops)
 		{
-		  switch (act_tdes->state)
+		  tmp_chkpt.ntops += log_Gl.trantable.num_assigned_indices;
+		  length_all_tops = sizeof (*chkpt_topops) * tmp_chkpt.ntops;
+		  ptr = realloc (chkpt_topops, length_all_tops);
+		  if (ptr == NULL)
 		    {
-		    case TRAN_UNACTIVE_TOPOPE_COMMITTED_WITH_POSTPONE:
-		      if (ntops >= tmp_chkpt.ntops)
-			{
-			  tmp_chkpt.ntops += log_Gl.trantable.num_assigned_indices;
-			  length_all_tops = sizeof (*chkpt_topops) * tmp_chkpt.ntops;
-			  ptr = realloc (chkpt_topops, length_all_tops);
-			  if (ptr == NULL)
-			    {
-			      free_and_init (chkpt_trans);
-			      pthread_mutex_unlock (&log_Gl.prior_info.prior_lsa_mutex);
-			      TR_TABLE_CS_EXIT (thread_p);
-			      goto error_cannot_chkpt;
-			    }
-			  chkpt_topops = (LOG_INFO_CHKPT_SYSOP_START_POSTPONE *) ptr;
-			}
-
-		      chkpt_topone = &chkpt_topops[ntops];
-		      chkpt_topone->trid = act_tdes->trid;
-		      chkpt_topone->sysop_start_postpone_lsa = tdes->rcv.sysop_start_postpone_lsa;
-		      ntops++;
-		      break;
-		    default:
-		      continue;
+		      free_and_init (chkpt_trans);
+		      pthread_mutex_unlock (&log_Gl.prior_info.prior_lsa_mutex);
+		      TR_TABLE_CS_EXIT (thread_p);
+		      goto error_cannot_chkpt;
 		    }
+		  chkpt_topops = (LOG_INFO_CHKPT_SYSOP_START_POSTPONE *) ptr;
 		}
+
+	      chkpt_topone = &chkpt_topops[ntops];
+	      chkpt_topone->trid = act_tdes->trid;
+	      chkpt_topone->sysop_start_postpone_lsa = act_tdes->rcv.sysop_start_postpone_lsa;
+	      ntops++;
 	    }
 	}
     }

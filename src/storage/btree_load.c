@@ -631,6 +631,7 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name, TP
 #if !defined(NDEBUG)
   int track_id;
 #endif
+  bool is_sysop_started = false;
 
   /* Check for robustness */
   if (!btid || !hfids || !class_oids || !attr_ids || !key_type)
@@ -658,6 +659,7 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name, TP
    */
 
   log_sysop_start (thread_p);
+  is_sysop_started = true;
 
 #if !defined(NDEBUG)
   track_id = thread_rc_track_enter (thread_p);
@@ -925,11 +927,10 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name, TP
 			 load_args->btid->sys_btid->root_pageid, load_args->btid->sys_btid->vfid.volid,
 			 load_args->btid->sys_btid->vfid.fileid);
 	}
-      /* there are no index entries, destroy index file and call index creation */
-      if (file_destroy (thread_p, &btid->vfid) != NO_ERROR)
-	{
-	  goto error;
-	}
+      /* redo an empty index, but first destroy the one we created. the safest way is to abort changes so far. */
+      log_sysop_abort (thread_p);
+      is_sysop_started = false;
+
       os_free_and_init (load_args->leaf_nleaf_recdes.data);
       os_free_and_init (load_args->ovf_recdes.data);
       pr_clear_value (&load_args->current_key);
@@ -985,12 +986,19 @@ xbtree_load_index (THREAD_ENTRY * thread_p, BTID * btid, const char *bt_name, TP
     }
 #endif
 
-  /* todo: we have the option to commit & undo here. on undo, we can destroy the file directly. */
-  log_sysop_attach_to_outer (thread_p);
-  if (unique_pk)
+  if (is_sysop_started)
     {
-      /* drop statistics if aborted */
-      log_append_undo_data2 (thread_p, RVBT_REMOVE_UNIQUE_STATS, NULL, NULL, NULL_OFFSET, sizeof (BTID), btid);
+      /* todo: we have the option to commit & undo here. on undo, we can destroy the file directly. */
+      log_sysop_attach_to_outer (thread_p);
+      if (unique_pk)
+	{
+	  /* drop statistics if aborted */
+	  log_append_undo_data2 (thread_p, RVBT_REMOVE_UNIQUE_STATS, NULL, NULL, NULL_OFFSET, sizeof (BTID), btid);
+	}
+    }
+  else
+    {
+      /* index was not loaded and xbtree_add_index was called instead. we have nothing to log here. */
     }
 
   LOG_CS_ENTER (thread_p);
@@ -1082,7 +1090,10 @@ error:
     }
 #endif
 
-  log_sysop_abort (thread_p);
+  if (is_sysop_started)
+    {
+      log_sysop_abort (thread_p);
+    }
 
   if (prm_get_bool_value (PRM_ID_LOG_BTREE_OPS))
     {
@@ -1872,9 +1883,6 @@ static int
 btree_load_new_page (THREAD_ENTRY * thread_p, const BTID * btid, BTREE_NODE_HEADER * header, int node_level,
 		     VPID * vpid_new, PAGE_PTR * page_new)
 {
-  LOG_DATA_ADDR addr;
-  unsigned short alignment;
-
   int error_code = NO_ERROR;
 
   assert ((header != NULL && node_level >= 1)	/* leaf, non-leaf */
@@ -1885,28 +1893,19 @@ btree_load_new_page (THREAD_ENTRY * thread_p, const BTID * btid, BTREE_NODE_HEAD
   log_sysop_start (thread_p);
 
   /* allocate new page */
-  error_code = file_alloc (thread_p, &btid->vfid, vpid_new);
+  error_code = file_alloc (thread_p, &btid->vfid, btree_initialize_new_page, NULL, vpid_new, page_new);
   if (error_code != NO_ERROR)
     {
       ASSERT_ERROR ();
       goto end;
     }
-  *page_new = pgbuf_fix (thread_p, vpid_new, NEW_PAGE, PGBUF_LATCH_WRITE, PGBUF_UNCONDITIONAL_LATCH);
   if (*page_new == NULL)
     {
-      ASSERT_ERROR_AND_SET (error_code);
+      assert_release (false);
+      error_code = ER_FAILED;
       goto end;
     }
-  pgbuf_set_page_ptype (thread_p, *page_new, PAGE_BTREE);
-  alignment = BTREE_MAX_ALIGN;
-
-  spage_initialize (thread_p, *page_new, UNANCHORED_KEEP_SEQUENCE, alignment, DONT_SAFEGUARD_RVSPACE);
-
-  addr.vfid = &btid->vfid;
-  addr.offset = -1;		/* No header slot is initialized */
-  addr.pgptr = *page_new;
-
-  log_append_redo_data (thread_p, RVBT_GET_NEWPAGE, &addr, sizeof (alignment), &alignment);
+  (void) pgbuf_check_page_ptype (thread_p, *page_new, PAGE_BTREE);
 
   if (header)
     {				/* This is going to be a leaf or non-leaf page */
@@ -1954,8 +1953,7 @@ end:
       log_sysop_commit (thread_p);
     }
 
-  /* success */
-  return NO_ERROR;
+  return error_code;
 }
 
 /*

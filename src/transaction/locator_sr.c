@@ -1884,8 +1884,8 @@ locator_check_class_on_heap (const void *name, void *ent, void *args)
   classname = (char *) name;
   class_oid = &entry->e_current.oid;
 
-  heap_classname = heap_get_class_name_alloc_if_diff (thread_p, class_oid, (char *) classname);
-  if (heap_classname == NULL)
+  if (heap_get_class_name_alloc_if_diff (thread_p, class_oid, (char *) classname, &heap_classname) != NO_ERROR
+      || heap_classname == NULL)
     {
       if (er_errid () == ER_HEAP_UNKNOWN_OBJECT)
 	{
@@ -2067,9 +2067,6 @@ xlocator_assign_oid (THREAD_ENTRY * thread_p, const HFID * hfid, OID * perm_oid,
       error_code = locator_permoid_class_name (thread_p, classname, perm_oid);
       assert (error_code == NO_ERROR);
     }
-
-  /* Release the lock which was set in heap_assign_address_with_class_oid according to isolation level */
-  lock_unlock_object (thread_p, perm_oid, class_oid, X_LOCK, false);
 
   return error_code;
 }
@@ -2331,7 +2328,6 @@ locator_lock_and_return_object (THREAD_ENTRY * thread_p, LOCATOR_RETURN_NXOBJ * 
   SCAN_CODE scan;		/* Scan return value for next operation */
   int guess_chn = chn;
   int tran_index = NULL_TRAN_INDEX;
-  int lock_ret;
 
   /* 
    * The next object is placed in the assigned recdes area if the cached
@@ -2473,8 +2469,8 @@ xlocator_fetch (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
 	  error_code = ER_HEAP_UNKNOWN_OBJECT;
 	  if (er_errid () != error_code)
 	    {
-	      /* error has not been previously set */
-	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, error_code, 3, oid->volid, oid->pageid, oid->slotid);
+	      /* error was not previously set; set error in order to have it returned to client */
+	      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, error_code, 3, oid->volid, oid->pageid, oid->slotid);
 	    }
 	  return error_code;
 	}
@@ -2578,9 +2574,8 @@ xlocator_fetch (THREAD_ENTRY * thread_p, OID * oid, int chn, LOCK lock,
 	  error_code = ER_HEAP_UNKNOWN_OBJECT;
 	  if (er_errid () != error_code)
 	    {
-	      /* error was not previously set */
-	      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_HEAP_UNKNOWN_OBJECT, 3, oid->volid, oid->pageid,
-		      oid->slotid);
+	      /* error was not previously set; set error in order to have it returned to client */
+	      er_set (ER_WARNING_SEVERITY, ARG_FILE_LINE, error_code, 3, oid->volid, oid->pageid, oid->slotid);
 	    }
 	  goto error;
 	}
@@ -5291,21 +5286,12 @@ locator_insert_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid, OID
     }
 #endif
 
-  /* Unlock the object according to isolation level */
-  /* locked by heap_insert */
-  /* manual duration */
-  lock_unlock_object (thread_p, &null_oid, &real_class_oid, X_LOCK, false);
-
   *force_count = 1;
 
 error1:
   /* update the OID of the class with the actual partition in which the object was inserted */
   COPY_OID (class_oid, &real_class_oid);
   HFID_COPY (hfid, &real_hfid);
-  if (error_code != NO_ERROR)
-    {
-      lock_unlock_object (thread_p, oid, class_oid, X_LOCK, false);
-    }
 
 error2:
   if (cache_attr_copyarea != NULL)
@@ -5486,7 +5472,12 @@ locator_update_force (THREAD_ENTRY * thread_p, HFID * hfid, OID * class_oid, OID
       assert (classname != NULL);
       assert (strlen (classname) < 255);
 
-      old_classname = heap_get_class_name_alloc_if_diff (thread_p, oid, classname);
+      if (heap_get_class_name_alloc_if_diff (thread_p, oid, classname, &old_classname) != NO_ERROR)
+	{
+	  /* it is unexpected to fail to get the classname of an existing class */
+	  ASSERT_ERROR_AND_SET (error_code);
+	  goto error;
+	}
 
       /* 
        * Compare the classname pointers. If the same pointers classes are the
@@ -7149,6 +7140,8 @@ xlocator_repl_force (THREAD_ENTRY * thread_p, LC_COPYAREA * force_area, LC_COPYA
   return error_code;
 
 exit_on_error:
+  assert_release (error_code == ER_FAILED || error_code == er_errid ());
+
   if (DB_IS_NULL (&key_value) == false)
     {
       pr_clear_value (&key_value);
@@ -7161,7 +7154,6 @@ exit_on_error:
 
   (void) xtran_server_end_topop (thread_p, LOG_RESULT_TOPOP_ABORT, &lsa);
 
-  assert_release (error_code == ER_FAILED || error_code == er_errid ());
   return error_code;
 }
 
@@ -7370,6 +7362,7 @@ error:
 
   /* The reevaluation at update phase of update is currently disabled */
   assert (error_code != ER_MVCC_NOT_SATISFIED_REEVALUATION);
+  assert_release (error_code == ER_FAILED || error_code == er_errid ());
 
   if (force_scancache != NULL)
     {
@@ -7378,7 +7371,6 @@ error:
 
   (void) xtran_server_end_topop (thread_p, LOG_RESULT_TOPOP_ABORT, &lsa);
 
-  assert_release (error_code == ER_FAILED || error_code == er_errid ());
   return error_code;
 }
 
@@ -7885,7 +7877,11 @@ locator_add_or_remove_index_internal (THREAD_ENTRY * thread_p, RECDES * recdes, 
     }
 
 #if defined(ENABLE_SYSTEMTAP)
-  classname = heap_get_class_name (thread_p, class_oid);
+  if (heap_get_class_name (thread_p, class_oid, &classname) != NO_ERROR || classname == NULL)
+    {
+      ASSERT_ERROR_AND_SET (error_code);
+      goto error;
+    }
 #endif /* ENABLE_SYSTEMTAP */
 
   for (i = 0; i < num_btids; i++)
@@ -8441,7 +8437,11 @@ locator_update_index (THREAD_ENTRY * thread_p, RECDES * new_recdes, RECDES * old
     }
 
 #if defined(ENABLE_SYSTEMTAP)
-  classname = heap_get_class_name (thread_p, class_oid);
+  if (heap_get_class_name (thread_p, class_oid, &classname) != NO_ERROR || classname == NULL)
+    {
+      ASSERT_ERROR_AND_SET (error_code);
+      goto error;
+    }
 #endif /* ENABLE_SYSTEMTAP */
 
   for (i = 0; i < num_btids; i++)
@@ -9268,10 +9268,6 @@ xlocator_notify_isolation_incons (THREAD_ENTRY * thread_p, LC_COPYAREA ** synch_
     {
       more_synch = true;
     }
-  else
-    {
-      lock_unlock_by_isolation_level (thread_p);
-    }
 
   return more_synch;
 }
@@ -9541,7 +9537,11 @@ locator_check_btree_entries (THREAD_ENTRY * thread_p, BTID * btid, HFID * hfid, 
 
 		      if (!OID_ISNULL (class_oid))
 			{
-			  classname = heap_get_class_name (thread_p, class_oid);
+			  if (heap_get_class_name (thread_p, class_oid, &classname) != NO_ERROR)
+			    {
+			      /* ignore */
+			      er_clear ();
+			    }
 			}
 
 		      er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LC_INCONSISTENT_BTREE_ENTRY_TYPE1, 12,
@@ -9677,7 +9677,11 @@ locator_check_btree_entries (THREAD_ENTRY * thread_p, BTID * btid, HFID * hfid, 
 		{
 		  if (!OID_ISNULL (class_oid))
 		    {
-		      classname = heap_get_class_name (thread_p, class_oid);
+		      if (heap_get_class_name (thread_p, class_oid, &classname) != NO_ERROR)
+			{
+			  /* ignore */
+			  er_clear ();
+			}
 		    }
 
 		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LC_INCONSISTENT_BTREE_ENTRY_TYPE2, 11,
@@ -9707,7 +9711,11 @@ locator_check_btree_entries (THREAD_ENTRY * thread_p, BTID * btid, HFID * hfid, 
     {
       if (!OID_ISNULL (class_oid))
 	{
-	  classname = heap_get_class_name (thread_p, class_oid);
+	  if (heap_get_class_name (thread_p, class_oid, &classname) != NO_ERROR)
+	    {
+	      /* ignore */
+	      er_clear ();
+	    }
 	}
 
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LC_INCONSISTENT_BTREE_ENTRY_TYPE3, 10,
@@ -9978,7 +9986,11 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid, OID * 
 			  key_dmp = pr_valstring (key);
 			  if (!OID_ISNULL (class_oid))
 			    {
-			      classname = heap_get_class_name (thread_p, class_oid);
+			      if (heap_get_class_name (thread_p, class_oid, &classname) != NO_ERROR)
+				{
+				  /* ignore */
+				  er_clear ();
+				}
 			    }
 
 			  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LC_INCONSISTENT_BTREE_ENTRY_TYPE1, 12,
@@ -10110,7 +10122,11 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid, OID * 
 		{
 		  if (!OID_ISNULL (class_oid))
 		    {
-		      classname = heap_get_class_name (thread_p, class_oid);
+		      if (heap_get_class_name (thread_p, class_oid, &classname) != NO_ERROR)
+			{
+			  /* ignore */
+			  er_clear ();
+			}
 		    }
 
 		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LC_INCONSISTENT_BTREE_ENTRY_TYPE2, 11,
@@ -10153,7 +10169,11 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid, OID * 
 		{
 		  if (!OID_ISNULL (class_oid))
 		    {
-		      classname = heap_get_class_name (thread_p, class_oid);
+		      if (heap_get_class_name (thread_p, class_oid, &classname) != NO_ERROR)
+			{
+			  /* ignore */
+			  er_clear ();
+			}
 		    }
 
 		  er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LC_INCONSISTENT_BTREE_ENTRY_TYPE8, 11,
@@ -10197,7 +10217,11 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid, OID * 
     {
       if (!OID_ISNULL (class_oid))
 	{
-	  classname = heap_get_class_name (thread_p, class_oid);
+	  if (heap_get_class_name (thread_p, class_oid, &classname) != NO_ERROR)
+	    {
+	      /* ignore */
+	      er_clear ();
+	    }
 	}
 
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LC_INCONSISTENT_BTREE_ENTRY_TYPE4, 11,
@@ -10218,7 +10242,11 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid, OID * 
     {
       if (!OID_ISNULL (class_oid))
 	{
-	  classname = heap_get_class_name (thread_p, class_oid);
+	  if (heap_get_class_name (thread_p, class_oid, &classname) != NO_ERROR)
+	    {
+	      /* ignore */
+	      er_clear ();
+	    }
 	}
 
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LC_INCONSISTENT_BTREE_ENTRY_TYPE5, 10,
@@ -10238,7 +10266,11 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid, OID * 
     {
       if (!OID_ISNULL (class_oid))
 	{
-	  classname = heap_get_class_name (thread_p, class_oid);
+	  if (heap_get_class_name (thread_p, class_oid, &classname) != NO_ERROR)
+	    {
+	      /* ignore */
+	      er_clear ();
+	    }
 	}
 
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LC_INCONSISTENT_BTREE_ENTRY_TYPE7, 10,
@@ -10258,7 +10290,11 @@ locator_check_unique_btree_entries (THREAD_ENTRY * thread_p, BTID * btid, OID * 
     {
       if (!OID_ISNULL (class_oid))
 	{
-	  classname = heap_get_class_name (thread_p, class_oid);
+	  if (heap_get_class_name (thread_p, class_oid, &classname) != NO_ERROR)
+	    {
+	      /* ignore */
+	      er_clear ();
+	    }
 	}
 
       er_set (ER_ERROR_SEVERITY, ARG_FILE_LINE, ER_LC_INCONSISTENT_BTREE_ENTRY_TYPE6, 11,
@@ -13249,6 +13285,14 @@ locator_lock_and_get_object_with_evaluation (THREAD_ENTRY * thread_p, OID * oid,
       class_oid = &class_oid_local;
     }
 
+  if (scan_cache && ispeeking == COPY && recdes != NULL)
+    {
+      /* Allocate an area to hold the object. Assume that the object will fit in two pages for not better estimates. */
+      if (heap_scan_cache_allocate_area (thread_p, scan_cache, DB_PAGESIZE * 2) != NO_ERROR)
+	{
+	  return S_ERROR;
+	}
+    }
   heap_init_get_context (thread_p, &context, oid, class_oid, recdes, scan_cache, ispeeking, old_chn);
 
   /* get class_oid if it is unknown */
@@ -13373,6 +13417,15 @@ locator_get_object (THREAD_ENTRY * thread_p, const OID * oid, OID * class_oid, R
       class_oid = &class_oid_local;
     }
 
+  if (scan_cache && ispeeking == COPY && recdes != NULL)
+    {
+      /* Allocate an area to hold the object. Assume that the object will fit in two pages for not better estimates. */
+      if (heap_scan_cache_allocate_area (thread_p, scan_cache, DB_PAGESIZE * 2) != NO_ERROR)
+	{
+	  return S_ERROR;
+	}
+    }
+
   heap_init_get_context (thread_p, &context, oid, class_oid, recdes, scan_cache, ispeeking, chn);
 
   /* get class_oid if it is unknown */
@@ -13464,10 +13517,17 @@ locator_lock_and_get_object (THREAD_ENTRY * thread_p, const OID * oid, OID * cla
   HEAP_GET_CONTEXT context;
   SCAN_CODE scan_code;
 
+  if (scan_cache && ispeeking == COPY && recdes != NULL)
+    {
+      /* Allocate an area to hold the object. Assume that the object will fit in two pages for not better estimates. */
+      if (heap_scan_cache_allocate_area (thread_p, scan_cache, DB_PAGESIZE * 2) != NO_ERROR)
+	{
+	  return S_ERROR;
+	}
+    }
+
   heap_init_get_context (thread_p, &context, oid, class_oid, recdes, scan_cache, ispeeking, old_chn);
-
   scan_code = locator_lock_and_get_object_internal (thread_p, &context, lock);
-
   heap_clean_get_context (thread_p, &context);
   return scan_code;
 }

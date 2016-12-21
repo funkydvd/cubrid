@@ -183,7 +183,6 @@ extern int file_numerable_truncate (THREAD_ENTRY * thread_p, const VFID * vfid, 
 extern void file_tempcache_drop_tran_temp_files (THREAD_ENTRY * thread_p);
 
 extern void file_temp_preserve (THREAD_ENTRY * thread_p, const VFID * vfid);
-extern int file_temp_save_tran_file (THREAD_ENTRY * thread_p, const VFID * vfid, FILE_TYPE file_type);
 extern int file_get_tran_num_temp_files (THREAD_ENTRY * thread_p);
 
 extern int file_tracker_create (THREAD_ENTRY * thread_p, VFID * vfid_tracker_out);
@@ -220,10 +219,7 @@ extern int file_rv_fhead_dealloc (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int file_rv_user_page_mark_delete (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int file_rv_user_page_unmark_delete_logical (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int file_rv_user_page_unmark_delete_physical (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
-extern int file_rv_extdata_merge_undo (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
-extern int file_rv_extdata_merge_redo (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
-extern int file_rv_extdata_merge_compare_vsid_redo (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
-extern int file_rv_extdata_merge_compare_track_item_redo (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
+extern int file_rv_extdata_merge (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int file_rv_dealloc_on_undo (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int file_rv_dealloc_on_postpone (THREAD_ENTRY * thread_p, LOG_RCV * rcv);
 extern int file_rv_header_update_mark_deleted (THREAD_ENTRY * thread_p, LOG_RCV * rcv);

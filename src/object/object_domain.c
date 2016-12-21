@@ -10286,7 +10286,15 @@ tp_value_cast_internal (const DB_VALUE * src, DB_VALUE * dest, const TP_DOMAIN *
 	/*IMPORTANT CODE HERE */
 	int nr = strlen (src->data.ch.medium.buf);
 	char *rez = (char *) db_private_alloc (NULL, nr + 3);
+	json_error_t err2;
+	json_t *rez2;
 	OR_PUT_INT (rez, nr);
+	rez2 = json_loads (src->data.ch.medium.buf, 0, &err2);
+	if (rez2 == NULL)
+	  {
+	    status = DOMAIN_INCOMPATIBLE;
+	    break;
+	  }
 	err = db_make_json (target, src->data.ch.medium.buf);
 	break;
       }

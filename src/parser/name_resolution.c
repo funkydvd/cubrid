@@ -4923,11 +4923,17 @@ pt_get_resolution (PARSER_CONTEXT * parser, PT_BIND_NAMES_ARG * bind_arg, PT_NOD
 	{
 	  /* This is NOT an exposed name, it must be an object attribute. It must also be a legitimate root for this
 	   * path expression. */
-	  if (arg1->type_enum != PT_TYPE_OBJECT)
+	  if (arg1->type_enum != PT_TYPE_OBJECT && arg1->type_enum != PT_TYPE_JSON)
 	    {
 	      PT_ERRORmf2 (parser, arg1, MSGCAT_SET_PARSER_SEMANTIC, MSGCAT_SEMANTIC_IS_NOT_OBJECT_TYPE,
 			   pt_short_print (parser, arg1), pt_show_type_enum (arg1->type_enum));
 	      return NULL;
+	    }
+	  if (arg1->type_enum == PT_TYPE_JSON)
+	    {
+
+	      in_node = arg1;
+	      return in_node;
 	    }
 	  else if (!arg1->data_type)
 	    {
